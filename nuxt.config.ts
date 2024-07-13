@@ -23,7 +23,7 @@ export default defineNuxtConfig({
     },
   },
   extends: ['@nuxt/ui-pro'],
-  modules: ['@nuxt/eslint', '@nuxt/fonts', '@nuxt/ui', '@vueuse/nuxt'],
+  modules: ['@nuxt/fonts', '@nuxt/ui', '@vueuse/nuxt'],
 
   ui: {
     icons: ['heroicons', 'simple-icons'],
@@ -45,14 +45,5 @@ export default defineNuxtConfig({
 
   future: {
     compatibilityVersion: 4,
-  },
-
-  eslint: {
-    config: {
-      stylistic: {
-        commaDangle: 'never',
-        braceStyle: '1tbs',
-      },
-    },
   },
 });
