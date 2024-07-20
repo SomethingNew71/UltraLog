@@ -3,6 +3,7 @@
   import NavBar from './components/NavBar.vue';
   import ChannelCard from './components/ChannelCard.vue';
   import PlaybackChart from './components/PlaybackChart.vue';
+  import FileUploadList from './components/FileUploadList.vue';
   import { PlusIcon } from '@heroicons/vue/24/solid';
 
   import { Event, listen } from '@tauri-apps/api/event';
@@ -13,6 +14,7 @@
   const channels = ref<LogChannel[]>([]);
   const channelToAdd = ref<string>('');
   const selectedChannels = ref<LogChannel[]>([]);
+
   const loading = ref(false);
   let errors = ref({
     notFound: false,
@@ -25,14 +27,16 @@
     loading.value = true;
     const [filePath] = event.payload;
     channels.value = await invoke('add_file', { filePath });
-
-    channelToAdd.value = channels.value[0].name;
+    console.log(channels.value);
     loading.value = false;
-  }
-  listen('tauri://file-drop', debounce(dropHandler, 5_000, {
-    leading: true,
-    trailing: false,
-  }));
+  };
+  listen(
+    'tauri://file-drop',
+    debounce(dropHandler, 5_000, {
+      leading: true,
+      trailing: false,
+    })
+  );
 
   async function addChannel() {
     if (channelToAdd.value) {
@@ -80,28 +84,47 @@
         <PlaybackChart></PlaybackChart>
       </div>
       <div class="grid grid-cols-subgrid gap-4 content-baseline">
-        <div class="card bg-base-300 shadow-xl">
+        <div class="card bg-base-300 shadow-xl pt-2 pb-3">
           <div class="card-body p-3">
             <div class="card-title justify-between">
               <h2 class="text-primary text-2xl font-logo">Log Channels</h2>
             </div>
             <progress v-if="loading" class="progress progress-accent w-full"></progress>
-            <label class="form-control w-full">
+            <!-- <label class="form-control w-full">
               <select class="select select-bordered" v-model="channelToAdd" :disabled="loading">
                 <option v-for="channel in channels" :value="channel.name">{{ channel.name }}</option>
               </select>
               <div class="label">
                 <span class="label-text-alt">Max: 10 Channels</span>
               </div>
-            </label>
+            </label> -->
+            <v-autocomplete
+              label="Channel"
+              :disabled="loading || !channels.length"
+              :items="channels"
+              v-model="channelToAdd"
+              variant="outlined"
+              itemValue="name"
+              itemTitle="name"
+            ></v-autocomplete>
             <button @click="addChannel()" class="btn btn-success" :disabled="selectedChannels.length > 10">
               <PlusIcon class="size-6" />
               Add
             </button>
           </div>
         </div>
-        <ChannelCard v-for="channel in selectedChannels" :channel="channel"></ChannelCard>
+        <div class="card bg-base-300 shadow-xl pt-2 pb-3">
+          <div class="card-body p-3">
+            <div class="card-title justify-between">
+              <h2 class="text-primary text-2xl font-logo pb-3">Log Files</h2>
+            </div>
+            <FileUploadList></FileUploadList>
+          </div>
+        </div>
       </div>
+    </div>
+    <div class="grid grid-cols-5 gap-4 pt-3">
+      <ChannelCard v-for="channel in selectedChannels" :channel="channel"></ChannelCard>
     </div>
   </div>
   <div class="toast toast-end">
