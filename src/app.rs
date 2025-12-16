@@ -1,7 +1,10 @@
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::thread;
 
 use crate::parsers::{Channel, EcuType, Haltech, Log, Parseable};
 
@@ -22,6 +25,9 @@ const CHART_COLORS: &[[u8; 3]] = &[
 /// Maximum number of channels that can be selected
 const MAX_CHANNELS: usize = 10;
 
+/// Maximum points to render in chart (for performance)
+const MAX_CHART_POINTS: usize = 2000;
+
 /// Represents a loaded log file
 #[derive(Clone)]
 pub struct LoadedFile {
@@ -40,6 +46,25 @@ pub struct SelectedChannel {
     pub color_index: usize,
 }
 
+/// Result from background file loading
+enum LoadResult {
+    Success(LoadedFile),
+    Error(String),
+}
+
+/// Loading state
+enum LoadingState {
+    Idle,
+    Loading(String), // filename being loaded
+}
+
+/// Cache key for downsampled data
+#[derive(Hash, Eq, PartialEq, Clone)]
+struct CacheKey {
+    file_index: usize,
+    channel_index: usize,
+}
+
 /// Main application state
 pub struct UltraLogApp {
     /// List of loaded log files
@@ -54,6 +79,12 @@ pub struct UltraLogApp {
     toast_message: Option<(String, std::time::Instant)>,
     /// Track dropped files to prevent duplicates
     last_drop_time: Option<std::time::Instant>,
+    /// Channel for receiving loaded files from background thread
+    load_receiver: Option<Receiver<LoadResult>>,
+    /// Current loading state
+    loading_state: LoadingState,
+    /// Cache for downsampled chart data
+    downsample_cache: HashMap<CacheKey, Vec<[f64; 2]>>,
 }
 
 impl Default for UltraLogApp {
@@ -65,6 +96,9 @@ impl Default for UltraLogApp {
             channel_search: String::new(),
             toast_message: None,
             last_drop_time: None,
+            load_receiver: None,
+            loading_state: LoadingState::Idle,
+            downsample_cache: HashMap::new(),
         }
     }
 }
@@ -74,35 +108,75 @@ impl UltraLogApp {
         Self::default()
     }
 
-    /// Load a log file from disk
-    fn load_file(&mut self, path: PathBuf) -> Result<(), String> {
+    /// Start loading a file in the background
+    fn start_loading_file(&mut self, path: PathBuf) {
         // Check for duplicate
         if self.files.iter().any(|f| f.path == path) {
-            return Err("File already loaded".to_string());
+            self.show_toast("File already loaded");
+            return;
         }
 
-        let contents = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let filename = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Unknown".to_string());
 
-        // Try Haltech parser (can be extended for other formats)
+        self.loading_state = LoadingState::Loading(filename.clone());
+
+        let (sender, receiver): (Sender<LoadResult>, Receiver<LoadResult>) = channel();
+        self.load_receiver = Some(receiver);
+
+        // Spawn background thread for loading
+        thread::spawn(move || {
+            let result = Self::load_file_sync(path);
+            let _ = sender.send(result);
+        });
+    }
+
+    /// Synchronously load a file (runs in background thread)
+    fn load_file_sync(path: PathBuf) -> LoadResult {
+        let contents = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => return LoadResult::Error(format!("Failed to read file: {}", e)),
+        };
+
         let parser = Haltech;
-        let log = parser.parse(&contents).map_err(|e| e.to_string())?;
+        let log = match parser.parse(&contents) {
+            Ok(l) => l,
+            Err(e) => return LoadResult::Error(format!("Failed to parse file: {}", e)),
+        };
 
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "Unknown".to_string());
 
-        self.files.push(LoadedFile {
+        LoadResult::Success(LoadedFile {
             path,
             name,
             ecu_type: EcuType::Haltech,
             log,
-        });
+        })
+    }
 
-        // Auto-select the newly loaded file
-        self.selected_file = Some(self.files.len() - 1);
-
-        Ok(())
+    /// Check for completed background loads
+    fn check_loading_complete(&mut self) {
+        if let Some(receiver) = &self.load_receiver {
+            if let Ok(result) = receiver.try_recv() {
+                match result {
+                    LoadResult::Success(file) => {
+                        self.files.push(file);
+                        self.selected_file = Some(self.files.len() - 1);
+                        self.show_toast("File loaded successfully");
+                    }
+                    LoadResult::Error(e) => {
+                        self.show_toast(&format!("Error: {}", e));
+                    }
+                }
+                self.load_receiver = None;
+                self.loading_state = LoadingState::Idle;
+            }
+        }
     }
 
     /// Remove a loaded file
@@ -110,6 +184,27 @@ impl UltraLogApp {
         if index < self.files.len() {
             // Remove any selected channels from this file
             self.selected_channels.retain(|c| c.file_index != index);
+
+            // Clear cache entries for this file and update indices
+            let mut new_cache = HashMap::new();
+            for (key, value) in self.downsample_cache.drain() {
+                if key.file_index == index {
+                    // Skip entries for removed file
+                    continue;
+                } else if key.file_index > index {
+                    // Update indices for files after the removed one
+                    new_cache.insert(
+                        CacheKey {
+                            file_index: key.file_index - 1,
+                            channel_index: key.channel_index,
+                        },
+                        value,
+                    );
+                } else {
+                    new_cache.insert(key, value);
+                }
+            }
+            self.downsample_cache = new_cache;
 
             // Update file indices for remaining channels
             for channel in &mut self.selected_channels {
@@ -176,22 +271,101 @@ impl UltraLogApp {
         self.toast_message = Some((message.to_string(), std::time::Instant::now()));
     }
 
+    /// LTTB (Largest Triangle Three Buckets) downsampling algorithm
+    /// Reduces data points while preserving visual shape
+    fn downsample_lttb(times: &[f64], values: &[f64], target_points: usize) -> Vec<[f64; 2]> {
+        let n = times.len();
+
+        if n <= target_points || target_points < 3 {
+            // No downsampling needed
+            return times.iter().zip(values.iter()).map(|(t, v)| [*t, *v]).collect();
+        }
+
+        let mut result = Vec::with_capacity(target_points);
+
+        // Always include first point
+        result.push([times[0], values[0]]);
+
+        // Bucket size
+        let bucket_size = (n - 2) as f64 / (target_points - 2) as f64;
+
+        let mut a_index = 0usize;
+
+        for i in 0..(target_points - 2) {
+            // Calculate bucket range
+            let bucket_start = ((i as f64 + 1.0) * bucket_size).floor() as usize + 1;
+            let bucket_end = (((i + 2) as f64) * bucket_size).floor() as usize + 1;
+            let bucket_end = bucket_end.min(n - 1);
+
+            // Calculate average point for next bucket (for triangle calculation)
+            let next_bucket_start = bucket_end;
+            let next_bucket_end = (((i + 3) as f64) * bucket_size).floor() as usize + 1;
+            let next_bucket_end = next_bucket_end.min(n);
+
+            let (avg_x, avg_y) = if next_bucket_start < next_bucket_end {
+                let count = (next_bucket_end - next_bucket_start) as f64;
+                let sum_x: f64 = times[next_bucket_start..next_bucket_end].iter().sum();
+                let sum_y: f64 = values[next_bucket_start..next_bucket_end].iter().sum();
+                (sum_x / count, sum_y / count)
+            } else {
+                (times[n - 1], values[n - 1])
+            };
+
+            // Find point in current bucket with largest triangle area
+            let mut max_area = -1.0f64;
+            let mut max_index = bucket_start;
+
+            let a_x = times[a_index];
+            let a_y = values[a_index];
+
+            for j in bucket_start..bucket_end {
+                // Calculate triangle area
+                let area = ((a_x - avg_x) * (values[j] - a_y)
+                    - (a_x - times[j]) * (avg_y - a_y))
+                    .abs();
+
+                if area > max_area {
+                    max_area = area;
+                    max_index = j;
+                }
+            }
+
+            result.push([times[max_index], values[max_index]]);
+            a_index = max_index;
+        }
+
+        // Always include last point
+        result.push([times[n - 1], values[n - 1]]);
+
+        result
+    }
+
     /// Render the file sidebar
     fn render_sidebar(&mut self, ui: &mut egui::Ui) {
         ui.heading("Files");
         ui.separator();
 
+        // Show loading indicator
+        if let LoadingState::Loading(filename) = &self.loading_state {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(format!("Loading {}...", filename));
+            });
+            ui.separator();
+        }
+
         // File open button
-        if ui.button("Open File...").clicked() {
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("Log Files", &["csv", "log", "txt"])
-                .pick_file()
-            {
-                if let Err(e) = self.load_file(path) {
-                    self.show_toast(&format!("Error: {}", e));
+        let is_loading = matches!(self.loading_state, LoadingState::Loading(_));
+        ui.add_enabled_ui(!is_loading, |ui| {
+            if ui.button("Open File...").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Log Files", &["csv", "log", "txt"])
+                    .pick_file()
+                {
+                    self.start_loading_file(path);
                 }
             }
-        }
+        });
 
         ui.add_space(10.0);
 
@@ -206,18 +380,23 @@ impl UltraLogApp {
                     self.selected_file = Some(i);
                 }
 
-                // Delete button - use text instead of unicode
+                // Delete button
                 if ui.small_button("x").clicked() {
                     file_to_remove = Some(i);
                 }
             });
 
-            // Show ECU type
+            // Show ECU type and data info
             ui.indent(format!("file_indent_{}", i), |ui| {
                 ui.label(
-                    egui::RichText::new(file.ecu_type.name())
-                        .small()
-                        .color(egui::Color32::GRAY),
+                    egui::RichText::new(format!(
+                        "{} | {} channels | {} points",
+                        file.ecu_type.name(),
+                        file.log.channels.len(),
+                        file.log.data.len()
+                    ))
+                    .small()
+                    .color(egui::Color32::GRAY),
                 );
             });
         }
@@ -226,7 +405,7 @@ impl UltraLogApp {
             self.remove_file(index);
         }
 
-        if self.files.is_empty() {
+        if self.files.is_empty() && !is_loading {
             ui.label(
                 egui::RichText::new("Drop files here or click 'Open File'")
                     .italics()
@@ -246,7 +425,10 @@ impl UltraLogApp {
             // Search box
             ui.horizontal(|ui| {
                 ui.label("Search:");
-                ui.add(egui::TextEdit::singleline(&mut self.channel_search).desired_width(f32::INFINITY));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.channel_search)
+                        .desired_width(f32::INFINITY),
+                );
             });
 
             ui.add_space(5.0);
@@ -266,9 +448,9 @@ impl UltraLogApp {
             let mut channel_to_add: Option<(usize, usize)> = None;
 
             egui::ScrollArea::vertical()
-                .auto_shrink([false, false])  // Don't shrink - fill available space
+                .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    ui.set_width(ui.available_width());  // Fill width
+                    ui.set_width(ui.available_width());
 
                     for (channel_index, channel) in file.log.channels.iter().enumerate() {
                         let name = channel.name();
@@ -342,7 +524,6 @@ impl UltraLogApp {
                                             .strong()
                                             .color(color32),
                                     );
-                                    // Use text "x" instead of unicode symbol
                                     if ui.small_button("x").clicked() {
                                         channel_to_remove = Some(i);
                                     }
@@ -390,8 +571,8 @@ impl UltraLogApp {
         }
     }
 
-    /// Render the main chart
-    fn render_chart(&self, ui: &mut egui::Ui) {
+    /// Render the main chart with cached downsampled data
+    fn render_chart(&mut self, ui: &mut egui::Ui) {
         if self.selected_channels.is_empty() {
             ui.centered_and_justified(|ui| {
                 ui.label(
@@ -403,36 +584,58 @@ impl UltraLogApp {
             return;
         }
 
+        // Pre-compute and cache downsampled data for all selected channels
+        for selected in &self.selected_channels {
+            if selected.file_index >= self.files.len() {
+                continue;
+            }
+
+            let cache_key = CacheKey {
+                file_index: selected.file_index,
+                channel_index: selected.channel_index,
+            };
+
+            if !self.downsample_cache.contains_key(&cache_key) {
+                let file = &self.files[selected.file_index];
+                let times = file.log.get_times_as_f64();
+                let data = file.log.get_channel_data(selected.channel_index);
+
+                if times.len() == data.len() && !times.is_empty() {
+                    let points = Self::downsample_lttb(&times, &data, MAX_CHART_POINTS);
+                    self.downsample_cache.insert(cache_key, points);
+                }
+            }
+        }
+
+        // Now render the chart using cached data
+        let cache = &self.downsample_cache;
+        let files = &self.files;
+        let selected_channels = &self.selected_channels;
+
         Plot::new("log_chart")
             .legend(egui_plot::Legend::default())
             .show(ui, |plot_ui| {
-                for selected in &self.selected_channels {
-                    if selected.file_index >= self.files.len() {
+                for selected in selected_channels {
+                    if selected.file_index >= files.len() {
                         continue;
                     }
 
-                    let file = &self.files[selected.file_index];
-                    let times = file.log.get_times_as_f64();
-                    let data = file.log.get_channel_data(selected.channel_index);
+                    let cache_key = CacheKey {
+                        file_index: selected.file_index,
+                        channel_index: selected.channel_index,
+                    };
 
-                    if times.len() != data.len() || times.is_empty() {
-                        continue;
+                    if let Some(points) = cache.get(&cache_key) {
+                        let plot_points: PlotPoints = points.iter().copied().collect();
+                        let color = CHART_COLORS[selected.color_index % CHART_COLORS.len()];
+
+                        plot_ui.line(
+                            Line::new(plot_points)
+                                .name(&selected.channel.name())
+                                .color(egui::Color32::from_rgb(color[0], color[1], color[2]))
+                                .width(1.5),
+                        );
                     }
-
-                    let points: PlotPoints = times
-                        .iter()
-                        .zip(data.iter())
-                        .map(|(t, v)| [*t, *v])
-                        .collect();
-
-                    let color = CHART_COLORS[selected.color_index % CHART_COLORS.len()];
-
-                    plot_ui.line(
-                        Line::new(points)
-                            .name(&selected.channel.name())
-                            .color(egui::Color32::from_rgb(color[0], color[1], color[2]))
-                            .width(2.0),
-                    );
                 }
             });
     }
@@ -460,6 +663,11 @@ impl UltraLogApp {
 
     /// Handle file drops
     fn handle_dropped_files(&mut self, ctx: &egui::Context) {
+        // Don't accept drops while loading
+        if matches!(self.loading_state, LoadingState::Loading(_)) {
+            return;
+        }
+
         // Debounce file drops (5 second window)
         if let Some(last_drop) = self.last_drop_time {
             if last_drop.elapsed().as_secs() < 5 {
@@ -478,10 +686,9 @@ impl UltraLogApp {
         if !dropped_files.is_empty() {
             self.last_drop_time = Some(std::time::Instant::now());
 
-            for path in dropped_files {
-                if let Err(e) = self.load_file(path) {
-                    self.show_toast(&format!("Error: {}", e));
-                }
+            // Only load first file for now (could queue multiple)
+            if let Some(path) = dropped_files.into_iter().next() {
+                self.start_loading_file(path);
             }
         }
     }
@@ -489,11 +696,19 @@ impl UltraLogApp {
 
 impl eframe::App for UltraLogApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Check for completed background loads
+        self.check_loading_complete();
+
         // Handle file drops
         self.handle_dropped_files(ctx);
 
         // Apply dark theme
         ctx.set_visuals(egui::Visuals::dark());
+
+        // Request repaint while loading (for spinner animation)
+        if matches!(self.loading_state, LoadingState::Loading(_)) {
+            ctx.request_repaint();
+        }
 
         // Toast notifications
         self.render_toast(ctx);
@@ -506,7 +721,7 @@ impl eframe::App for UltraLogApp {
                 self.render_sidebar(ui);
             });
 
-        // Right panel for channel selection - fills remaining height
+        // Right panel for channel selection
         egui::SidePanel::right("channels_panel")
             .default_width(300.0)
             .min_width(200.0)
