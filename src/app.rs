@@ -249,7 +249,17 @@ impl UltraLogApp {
 
         let file = &self.files[file_index];
         let channel = file.log.channels[channel_index].clone();
-        let color_index = self.selected_channels.len() % CHART_COLORS.len();
+
+        // Find the first unused color index
+        let used_colors: std::collections::HashSet<usize> = self
+            .selected_channels
+            .iter()
+            .map(|c| c.color_index)
+            .collect();
+
+        let color_index = (0..CHART_COLORS.len())
+            .find(|i| !used_colors.contains(i))
+            .unwrap_or(0);
 
         self.selected_channels.push(SelectedChannel {
             file_index,
