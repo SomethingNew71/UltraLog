@@ -4,16 +4,11 @@ use std::error::Error;
 use super::haltech::{HaltechChannel, HaltechMeta};
 
 /// Metadata enum supporting different ECU formats
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Default)]
 pub enum Meta {
     Haltech(HaltechMeta),
+    #[default]
     Empty,
-}
-
-impl Default for Meta {
-    fn default() -> Self {
-        Meta::Empty
-    }
 }
 
 /// Channel enum supporting different ECU formats

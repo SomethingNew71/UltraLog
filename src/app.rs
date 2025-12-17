@@ -48,7 +48,7 @@ pub struct SelectedChannel {
 
 /// Result from background file loading
 enum LoadResult {
-    Success(LoadedFile),
+    Success(Box<LoadedFile>),
     Error(String),
 }
 
@@ -167,12 +167,12 @@ impl UltraLogApp {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "Unknown".to_string());
 
-        LoadResult::Success(LoadedFile {
+        LoadResult::Success(Box::new(LoadedFile {
             path,
             name,
             ecu_type: EcuType::Haltech,
             log,
-        })
+        }))
     }
 
     /// Check for completed background loads
@@ -181,7 +181,7 @@ impl UltraLogApp {
             if let Ok(result) = receiver.try_recv() {
                 match result {
                     LoadResult::Success(file) => {
-                        self.files.push(file);
+                        self.files.push(*file);
                         self.selected_file = Some(self.files.len() - 1);
                         self.update_time_range();
                         self.show_toast("File loaded successfully");
@@ -732,7 +732,7 @@ impl UltraLogApp {
                             ui.vertical(|ui| {
                                 ui.horizontal(|ui| {
                                     ui.label(
-                                        egui::RichText::new(&selected.channel.name())
+                                        egui::RichText::new(selected.channel.name())
                                             .strong()
                                             .color(color32),
                                     );

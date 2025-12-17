@@ -57,7 +57,7 @@ fn main() {
                 })
                 .collect();
             println!("  Time      | {}", header.join(" | "));
-            println!("  ----------+-{}", vec!["-------------"; 8].join("-+-"));
+            println!("  ----------+-{}", ["-------------"; 8].join("-+-"));
 
             for (time, row) in log.times.iter().zip(log.data.iter()).take(5) {
                 let values: Vec<String> = row
