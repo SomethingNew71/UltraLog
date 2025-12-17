@@ -65,6 +65,166 @@ pub enum ChannelType {
     TimeSeconds,
 }
 
+impl ChannelType {
+    /// Convert raw value to human-readable unit based on Haltech CAN protocol spec
+    /// Reference: https://support.haltech.com/portal/en/kb/articles/haltech-can-ecu-broadcast-protocol
+    pub fn convert_value(&self, raw: f64) -> f64 {
+        match self {
+            // RPM: y = x (no conversion)
+            ChannelType::EngineSpeed => raw,
+
+            // Absolute Pressure: y = x/10 (kPa absolute)
+            ChannelType::AbsPressure => raw / 10.0,
+
+            // Gauge Pressure: y = x/10 - 101.3 (kPa gauge, subtract atmospheric)
+            // Used for: Coolant Pressure, Fuel Pressure, Oil Pressure, Wastegate Pressure
+            ChannelType::Pressure => raw / 10.0 - 101.3,
+
+            // Percentage: y = x/10
+            ChannelType::Percentage
+            | ChannelType::PercentPerEngineCycle
+            | ChannelType::PercentPerLambda
+            | ChannelType::PercentPerRPM => raw / 10.0,
+
+            // Angle: y = x/10 (degrees)
+            ChannelType::Angle => raw / 10.0,
+
+            // Battery Voltage: y = x/1000 (Volts)
+            // Note: CSV export uses millivolts, not the CAN protocol's decavolts
+            ChannelType::BatteryVoltage => raw / 1000.0,
+
+            // Temperature: y = x/10 (Kelvin)
+            // To convert to Celsius: subtract 273.15 after
+            ChannelType::Temperature => raw / 10.0,
+
+            // Speed: y = x/10 (km/h)
+            ChannelType::Speed => raw / 10.0,
+
+            // Lambda/AFR: y = x/1000 (λ)
+            ChannelType::AFR => raw / 1000.0,
+
+            // Knock Level (Decibel): y = x/100 (dB)
+            ChannelType::Decibel => raw / 100.0,
+
+            // Injection Time (microseconds): y = x/1000 (convert to ms)
+            ChannelType::TimeMicroseconds => raw / 1000.0,
+
+            // Time in microseconds displayed as microseconds (no conversion)
+            ChannelType::TimeMicrosecondsAsMicroseconds => raw,
+
+            // Time milliseconds: y = x (ms)
+            ChannelType::TimeMilliseconds => raw,
+
+            // Time milliseconds as seconds: y = x/1000
+            ChannelType::TimeMillisecondsAsSeconds => raw / 1000.0,
+
+            // Time seconds: y = x
+            ChannelType::TimeSeconds => raw,
+
+            // Acceleration: y = x/10 (m/s²)
+            ChannelType::Acceleration => raw / 10.0,
+
+            // Angular velocity: y = x/10 (deg/s)
+            ChannelType::AngularVelocity => raw / 10.0,
+
+            // Current types
+            ChannelType::Current => raw / 1000.0,                    // mA to A
+            ChannelType::CurrentMicroampsAsMilliamps => raw / 1000.0, // μA to mA
+            ChannelType::CurrentMilliampsAsAmps => raw / 1000.0,     // mA to A
+
+            // Density: y = x/10 (g/m³)
+            ChannelType::Density => raw / 10.0,
+
+            // Flow: y = x (cc/min)
+            ChannelType::Flow => raw,
+
+            // Frequency: y = x (Hz)
+            ChannelType::Frequency => raw,
+
+            // Fuel Economy: y = x/10
+            ChannelType::FuelEconomy => raw / 10.0,
+
+            // Fuel Volume: y = x/10 (L)
+            ChannelType::FuelVolume => raw / 10.0,
+
+            // Gear: y = x (no conversion)
+            ChannelType::Gear => raw,
+
+            // Gear Ratio: y = x/100
+            ChannelType::GearRatio => raw / 100.0,
+
+            // Ratio: y = x/100
+            ChannelType::Ratio => raw / 100.0,
+
+            // Resistance: y = x (Ohms)
+            ChannelType::Resistance => raw,
+
+            // Stoichiometry: y = x/100
+            ChannelType::Stoichiometry => raw / 100.0,
+
+            // Distance types
+            ChannelType::DrivenDistance | ChannelType::Mileage => raw,
+
+            // Volume types
+            ChannelType::EngineVolume | ChannelType::InjFuelVolume => raw,
+
+            // Mass types
+            ChannelType::MassOverTime | ChannelType::MassPerCylinder => raw,
+
+            // Other specialized types
+            ChannelType::BoostToFuelFlowRate => raw,
+            ChannelType::ByteCount => raw,
+            ChannelType::PulsesPerLongDistance => raw,
+
+            // Raw/Unknown: no conversion
+            ChannelType::Raw => raw,
+        }
+    }
+
+    /// Get the display unit string for this channel type
+    pub fn unit(&self) -> &'static str {
+        match self {
+            ChannelType::EngineSpeed => "RPM",
+            ChannelType::AbsPressure => "kPa",
+            ChannelType::Pressure => "kPa",
+            ChannelType::Percentage
+            | ChannelType::PercentPerEngineCycle
+            | ChannelType::PercentPerLambda
+            | ChannelType::PercentPerRPM => "%",
+            ChannelType::Angle => "°",
+            ChannelType::BatteryVoltage => "V",
+            ChannelType::Temperature => "K",
+            ChannelType::Speed => "km/h",
+            ChannelType::AFR => "λ",
+            ChannelType::Decibel => "dB",
+            ChannelType::TimeMicroseconds => "ms",
+            ChannelType::TimeMicrosecondsAsMicroseconds => "μs",
+            ChannelType::TimeMilliseconds => "ms",
+            ChannelType::TimeMillisecondsAsSeconds => "s",
+            ChannelType::TimeSeconds => "s",
+            ChannelType::Acceleration => "m/s²",
+            ChannelType::AngularVelocity => "°/s",
+            ChannelType::Current
+            | ChannelType::CurrentMilliampsAsAmps => "A",
+            ChannelType::CurrentMicroampsAsMilliamps => "mA",
+            ChannelType::Density => "g/m³",
+            ChannelType::Flow => "cc/min",
+            ChannelType::Frequency => "Hz",
+            ChannelType::FuelEconomy => "L/100km",
+            ChannelType::FuelVolume => "L",
+            ChannelType::Gear => "",
+            ChannelType::GearRatio | ChannelType::Ratio => "",
+            ChannelType::Resistance => "Ω",
+            ChannelType::Stoichiometry => "",
+            ChannelType::DrivenDistance | ChannelType::Mileage => "km",
+            ChannelType::EngineVolume | ChannelType::InjFuelVolume => "cc",
+            ChannelType::MassOverTime => "g/s",
+            ChannelType::MassPerCylinder => "mg",
+            _ => "",
+        }
+    }
+}
+
 /// Haltech log file metadata
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct HaltechMeta {
@@ -85,6 +245,13 @@ pub struct HaltechChannel {
     pub r#type: ChannelType,
     pub display_min: Option<f64>,
     pub display_max: Option<f64>,
+}
+
+impl HaltechChannel {
+    /// Get the display unit for this channel
+    pub fn unit(&self) -> &'static str {
+        self.r#type.unit()
+    }
 }
 
 /// Haltech log file parser
@@ -167,19 +334,24 @@ impl Parseable for Haltech {
                     };
                     times.push(format!("{:.3}", relative_time));
 
-                    // Parse remaining values
+                    // Parse remaining values and apply unit conversions
                     let values: Vec<Value> = parts[1..]
                         .iter()
-                        .filter_map(|v| {
+                        .enumerate()
+                        .filter_map(|(idx, v)| {
                             let v = v.trim();
-                            // Try parsing as i64 first, then f64
-                            if let Ok(i) = v.parse::<i64>() {
-                                Some(Value::Int(i))
-                            } else if let Ok(f) = v.parse::<f64>() {
-                                Some(Value::Float(f))
-                            } else {
-                                None
-                            }
+                            // Parse raw value as f64
+                            let raw_value: Option<f64> = v.parse::<f64>().ok();
+
+                            raw_value.map(|raw| {
+                                // Apply conversion based on channel type if available
+                                let converted = if let Some(Channel::Haltech(ch)) = channels.get(idx) {
+                                    ch.r#type.convert_value(raw)
+                                } else {
+                                    raw
+                                };
+                                Value::Float(converted)
+                            })
                         })
                         .collect();
 
@@ -308,6 +480,58 @@ Log : 20250718 02:15:46
         assert_eq!(log.times[0], "0.000");
         assert_eq!(log.times[1], "0.020");
         assert_eq!(log.times[2], "0.040");
+
+        // Check unit conversions are applied
+        // RPM: y = x (no conversion) - raw 5000 -> 5000 RPM
+        assert_eq!(log.data[0][0].as_f64(), 5000.0);
+
+        // Pressure: y = x/10 - 101.3 (gauge kPa) - raw 1013 -> 0.0 kPa
+        let pressure_value = log.data[0][1].as_f64();
+        assert!((pressure_value - 0.0).abs() < 0.01, "Expected ~0.0, got {}", pressure_value);
+
+        // Check units
+        assert_eq!(log.channels[0].unit(), "RPM");
+        assert_eq!(log.channels[1].unit(), "kPa");
+    }
+
+    #[test]
+    fn test_channel_type_conversions() {
+        // RPM: no conversion
+        assert_eq!(ChannelType::EngineSpeed.convert_value(5000.0), 5000.0);
+
+        // Absolute Pressure: y = x/10
+        assert_eq!(ChannelType::AbsPressure.convert_value(1013.0), 101.3);
+
+        // Gauge Pressure: y = x/10 - 101.3
+        assert!((ChannelType::Pressure.convert_value(1013.0) - 0.0).abs() < 0.01);
+        assert!((ChannelType::Pressure.convert_value(2013.0) - 100.0).abs() < 0.01);
+
+        // Percentage: y = x/10
+        assert_eq!(ChannelType::Percentage.convert_value(500.0), 50.0);
+        assert_eq!(ChannelType::Percentage.convert_value(1000.0), 100.0);
+
+        // Angle: y = x/10
+        assert_eq!(ChannelType::Angle.convert_value(150.0), 15.0);
+        assert_eq!(ChannelType::Angle.convert_value(-300.0), -30.0);
+
+        // Battery Voltage: y = x/1000 (CSV uses millivolts)
+        assert_eq!(ChannelType::BatteryVoltage.convert_value(14000.0), 14.0);
+
+        // Temperature: y = x/10 (Kelvin)
+        assert_eq!(ChannelType::Temperature.convert_value(2931.0), 293.1);
+
+        // Speed: y = x/10
+        assert_eq!(ChannelType::Speed.convert_value(1200.0), 120.0);
+
+        // Lambda/AFR: y = x/1000
+        assert_eq!(ChannelType::AFR.convert_value(1000.0), 1.0);
+        assert_eq!(ChannelType::AFR.convert_value(850.0), 0.85);
+
+        // Knock dB: y = x/100
+        assert_eq!(ChannelType::Decibel.convert_value(2500.0), 25.0);
+
+        // Time microseconds to ms: y = x/1000
+        assert_eq!(ChannelType::TimeMicroseconds.convert_value(5000.0), 5.0);
     }
 
     #[test]

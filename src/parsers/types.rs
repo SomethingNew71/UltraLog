@@ -64,6 +64,12 @@ impl Channel {
             Channel::Haltech(h) => h.display_max,
         }
     }
+
+    pub fn unit(&self) -> &'static str {
+        match self {
+            Channel::Haltech(h) => h.unit(),
+        }
+    }
 }
 
 /// Value types for log data
