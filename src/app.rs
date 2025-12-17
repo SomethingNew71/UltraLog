@@ -445,63 +445,137 @@ impl UltraLogApp {
             ui.separator();
         }
 
-        // File open button
         let is_loading = matches!(self.loading_state, LoadingState::Loading(_));
-        ui.add_enabled_ui(!is_loading, |ui| {
-            if ui.button("Open File...").clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Log Files", &["csv", "log", "txt"])
-                    .pick_file()
-                {
-                    self.start_loading_file(path);
-                }
+
+        // File list (if any files loaded)
+        if !self.files.is_empty() {
+            let mut file_to_remove: Option<usize> = None;
+            for (i, file) in self.files.iter().enumerate() {
+                let is_selected = self.selected_file == Some(i);
+
+                ui.horizontal(|ui| {
+                    let response = ui.selectable_label(is_selected, &file.name);
+                    if response.clicked() {
+                        self.selected_file = Some(i);
+                    }
+
+                    // Delete button
+                    if ui.small_button("x").clicked() {
+                        file_to_remove = Some(i);
+                    }
+                });
+
+                // Show ECU type and data info
+                ui.indent(format!("file_indent_{}", i), |ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} | {} channels | {} points",
+                            file.ecu_type.name(),
+                            file.log.channels.len(),
+                            file.log.data.len()
+                        ))
+                        .small()
+                        .color(egui::Color32::GRAY),
+                    );
+                });
             }
-        });
 
-        ui.add_space(10.0);
+            if let Some(index) = file_to_remove {
+                self.remove_file(index);
+            }
 
-        // File list
-        let mut file_to_remove: Option<usize> = None;
-        for (i, file) in self.files.iter().enumerate() {
-            let is_selected = self.selected_file == Some(i);
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(5.0);
 
-            ui.horizontal(|ui| {
-                let response = ui.selectable_label(is_selected, &file.name);
-                if response.clicked() {
-                    self.selected_file = Some(i);
-                }
-
-                // Delete button
-                if ui.small_button("x").clicked() {
-                    file_to_remove = Some(i);
+            // Add more files button (compact when files exist)
+            ui.add_enabled_ui(!is_loading, |ui| {
+                if ui.button("+ Add File").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Log Files", &["csv", "log", "txt"])
+                        .pick_file()
+                    {
+                        self.start_loading_file(path);
+                    }
                 }
             });
+        } else if !is_loading {
+            // Nice drop zone when no files loaded
+            let primary_color = egui::Color32::from_rgb(113, 120, 78); // Olive green
+            let card_bg = egui::Color32::from_rgb(45, 45, 45); // Dark card for dark theme
+            let text_gray = egui::Color32::from_rgb(150, 150, 150);
 
-            // Show ECU type and data info
-            ui.indent(format!("file_indent_{}", i), |ui| {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{} | {} channels | {} points",
-                        file.ecu_type.name(),
-                        file.log.channels.len(),
-                        file.log.data.len()
-                    ))
-                    .small()
-                    .color(egui::Color32::GRAY),
-                );
-            });
-        }
+            ui.add_space(20.0);
 
-        if let Some(index) = file_to_remove {
-            self.remove_file(index);
-        }
+            // Drop zone card
+            egui::Frame::none()
+                .fill(card_bg)
+                .rounding(12.0)
+                .inner_margin(20.0)
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(70, 70, 70)))
+                .show(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        // Upload icon
+                        let icon_size = 32.0;
+                        let (icon_rect, _) = ui.allocate_exact_size(
+                            egui::vec2(icon_size, icon_size),
+                            egui::Sense::hover(),
+                        );
+                        Self::draw_upload_icon(ui, icon_rect.center(), icon_size, primary_color);
 
-        if self.files.is_empty() && !is_loading {
-            ui.label(
-                egui::RichText::new("Drop files here or click 'Open File'")
-                    .italics()
-                    .color(egui::Color32::GRAY),
-            );
+                        ui.add_space(12.0);
+
+                        // Select file button
+                        let button_response = egui::Frame::none()
+                            .fill(primary_color)
+                            .rounding(6.0)
+                            .inner_margin(egui::vec2(16.0, 8.0))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new("Select a file")
+                                        .color(egui::Color32::WHITE)
+                                        .size(14.0),
+                                );
+                            });
+
+                        if button_response.response.interact(egui::Sense::click()).clicked() {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter("Log Files", &["csv", "log", "txt"])
+                                .pick_file()
+                            {
+                                self.start_loading_file(path);
+                            }
+                        }
+
+                        if button_response.response.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+
+                        ui.add_space(12.0);
+
+                        ui.label(
+                            egui::RichText::new("or")
+                                .color(text_gray)
+                                .size(12.0),
+                        );
+
+                        ui.add_space(8.0);
+
+                        ui.label(
+                            egui::RichText::new("Drop file here")
+                                .color(egui::Color32::LIGHT_GRAY)
+                                .size(13.0),
+                        );
+
+                        ui.add_space(12.0);
+
+                        ui.label(
+                            egui::RichText::new("CSV, LOG, TXT")
+                                .color(text_gray)
+                                .size(11.0),
+                        );
+                    });
+                });
         }
     }
 
@@ -864,6 +938,34 @@ impl UltraLogApp {
                 }
             }
         });
+    }
+
+    /// Draw an upload icon (circle with arrow pointing up)
+    fn draw_upload_icon(ui: &mut egui::Ui, center: egui::Pos2, size: f32, color: egui::Color32) {
+        let painter = ui.painter();
+        let radius = size / 2.0;
+
+        // Draw circle outline
+        painter.circle_stroke(center, radius, egui::Stroke::new(2.0, color));
+
+        // Draw arrow pointing up
+        let arrow_size = size * 0.35;
+        let arrow_top = egui::pos2(center.x, center.y - arrow_size * 0.6);
+        let arrow_bottom = egui::pos2(center.x, center.y + arrow_size * 0.4);
+
+        // Arrow shaft
+        painter.line_segment([arrow_bottom, arrow_top], egui::Stroke::new(2.0, color));
+
+        // Arrow head
+        let head_size = arrow_size * 0.4;
+        painter.line_segment(
+            [arrow_top, egui::pos2(arrow_top.x - head_size, arrow_top.y + head_size)],
+            egui::Stroke::new(2.0, color),
+        );
+        painter.line_segment(
+            [arrow_top, egui::pos2(arrow_top.x + head_size, arrow_top.y + head_size)],
+            egui::Stroke::new(2.0, color),
+        );
     }
 
     /// Render toast notifications
