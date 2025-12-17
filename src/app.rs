@@ -736,6 +736,34 @@ impl UltraLogApp {
         }
     }
 
+    /// Normalize values to 0-1 range
+    fn normalize_points(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
+        if points.is_empty() {
+            return Vec::new();
+        }
+
+        // Find min and max Y values
+        let mut min_y = f64::MAX;
+        let mut max_y = f64::MIN;
+        for point in points {
+            min_y = min_y.min(point[1]);
+            max_y = max_y.max(point[1]);
+        }
+
+        // Handle case where all values are the same
+        let range = max_y - min_y;
+        if range.abs() < f64::EPSILON {
+            // All values are the same, put at 0.5
+            return points.iter().map(|p| [p[0], 0.5]).collect();
+        }
+
+        // Normalize to 0-1 range
+        points
+            .iter()
+            .map(|p| [p[0], (p[1] - min_y) / range])
+            .collect()
+    }
+
     /// Render the main chart with cached downsampled data
     fn render_chart(&mut self, ui: &mut egui::Ui) {
         if self.selected_channels.is_empty() {
@@ -749,7 +777,7 @@ impl UltraLogApp {
             return;
         }
 
-        // Pre-compute and cache downsampled data for all selected channels
+        // Pre-compute and cache downsampled + normalized data for all selected channels
         for selected in &self.selected_channels {
             if selected.file_index >= self.files.len() {
                 continue;
@@ -766,8 +794,10 @@ impl UltraLogApp {
                 let data = file.log.get_channel_data(selected.channel_index);
 
                 if times.len() == data.len() && !times.is_empty() {
-                    let points = Self::downsample_lttb(&times, &data, MAX_CHART_POINTS);
-                    self.downsample_cache.insert(cache_key, points);
+                    let downsampled = Self::downsample_lttb(&times, &data, MAX_CHART_POINTS);
+                    // Normalize Y values to 0-1 range so all channels overlay
+                    let normalized = Self::normalize_points(&downsampled);
+                    self.downsample_cache.insert(cache_key, normalized);
                 }
             }
         }
@@ -806,6 +836,8 @@ impl UltraLogApp {
             .allow_drag(true)
             .allow_zoom(true)
             .allow_scroll(true)
+            .y_axis_label("") // Hide Y axis label since values are normalized
+            .show_axes([true, false]) // Show X axis (time), hide Y axis (normalized 0-1)
             .show(ui, |plot_ui| {
                 // Draw channel data lines with values in legend
                 for (i, selected) in selected_channels.iter().enumerate() {
