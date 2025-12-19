@@ -13,8 +13,11 @@ UltraLog is a cross-platform desktop application for viewing and analyzing ECU (
 
 - **Multi-channel visualization** - Plot up to 10 data channels simultaneously with normalized overlay
 - **High-performance rendering** - LTTB (Largest Triangle Three Buckets) downsampling for smooth performance with large datasets
-- **Interactive timeline** - Click-to-seek, timeline scrubber, and cursor tracking modes
+- **Interactive timeline** - Click-to-seek, timeline scrubber, and playback controls (0.25x to 8x speed)
 - **Cursor tracking mode** - Keep the cursor centered while scrubbing through data
+- **Unit preferences** - Select between metric/imperial units for temperature, pressure, speed, distance, fuel economy, volume, flow rate, and acceleration
+- **Min/Max legend** - See peak values for each channel at a glance
+- **Colorblind mode** - Accessible color palette based on Wong's optimized palette
 - **Drag and drop** - Simply drop log files onto the window to load them
 - **Real-time values** - Legend displays live values at cursor position with units
 - **Cross-platform** - Runs on Windows, macOS, and Linux
@@ -73,9 +76,12 @@ The binary will be at `target/release/ultralog` (or `ultralog.exe` on Windows).
 
 1. Launch UltraLog
 2. Click "Select a file" or drag and drop a log file onto the window
-3. Select channels from the left panel to visualize
+3. Select channels from the right panel to visualize (click to toggle)
 4. Use the timeline scrubber or click on the chart to navigate
-5. Enable "Cursor Tracking" in View Options to keep the cursor centered while scrubbing
+5. Use playback controls to animate through the data at various speeds
+6. Configure unit preferences via the **Units** menu (temperature, pressure, speed, etc.)
+7. Enable "Cursor Tracking" in View Options to keep the cursor centered while scrubbing
+8. Enable "Color Blind Mode" in View Options for accessible colors
 
 ### Supported File Types
 
