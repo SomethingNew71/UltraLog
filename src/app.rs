@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 
-use crate::parsers::{EcuMaster, EcuType, Haltech, Parseable};
+use crate::parsers::{EcuMaster, EcuType, Haltech, Parseable, Speeduino};
 use crate::state::{
     CacheKey, LoadResult, LoadedFile, LoadingState, SelectedChannel, CHART_COLORS,
     COLORBLIND_COLORS, MAX_CHANNELS,
@@ -183,27 +183,44 @@ impl UltraLogApp {
 
     /// Synchronously load a file (runs in background thread)
     fn load_file_sync(path: PathBuf) -> LoadResult {
-        let contents = match fs::read_to_string(&path) {
-            Ok(c) => c,
+        // First try reading as binary to detect Speeduino format
+        let binary_data = match fs::read(&path) {
+            Ok(d) => d,
             Err(e) => return LoadResult::Error(format!("Failed to read file: {}", e)),
         };
 
         // Auto-detect file format and parse
-        let (log, ecu_type) = if EcuMaster::detect(&contents) {
-            // ECUMaster format detected
-            let parser = EcuMaster;
-            match parser.parse(&contents) {
-                Ok(l) => (l, EcuType::EcuMaster),
+        let (log, ecu_type) = if Speeduino::detect(&binary_data) {
+            // Speeduino MLG format detected (binary)
+            match Speeduino::parse_binary(&binary_data) {
+                Ok(l) => (l, EcuType::Speeduino),
                 Err(e) => {
-                    return LoadResult::Error(format!("Failed to parse ECUMaster file: {}", e))
+                    return LoadResult::Error(format!("Failed to parse Speeduino file: {}", e))
                 }
             }
         } else {
-            // Default to Haltech format
-            let parser = Haltech;
-            match parser.parse(&contents) {
-                Ok(l) => (l, EcuType::Haltech),
-                Err(e) => return LoadResult::Error(format!("Failed to parse file: {}", e)),
+            // Try parsing as text-based formats
+            let contents = match String::from_utf8(binary_data) {
+                Ok(c) => c,
+                Err(_) => return LoadResult::Error("File is not valid UTF-8 text".into()),
+            };
+
+            if EcuMaster::detect(&contents) {
+                // ECUMaster format detected
+                let parser = EcuMaster;
+                match parser.parse(&contents) {
+                    Ok(l) => (l, EcuType::EcuMaster),
+                    Err(e) => {
+                        return LoadResult::Error(format!("Failed to parse ECUMaster file: {}", e))
+                    }
+                }
+            } else {
+                // Default to Haltech format
+                let parser = Haltech;
+                match parser.parse(&contents) {
+                    Ok(l) => (l, EcuType::Haltech),
+                    Err(e) => return LoadResult::Error(format!("Failed to parse file: {}", e)),
+                }
             }
         };
 
@@ -432,6 +449,15 @@ impl UltraLogApp {
         let color_index = (0..CHART_COLORS.len())
             .find(|i| !used_colors.contains(i))
             .unwrap_or(0);
+
+        eprintln!(
+            "DEBUG: Adding channel - file={} channel={} name={} (total selected: {} -> {})",
+            file_index,
+            channel_index,
+            channel.name(),
+            self.selected_channels.len(),
+            self.selected_channels.len() + 1
+        );
 
         self.selected_channels.push(SelectedChannel {
             file_index,

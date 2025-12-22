@@ -68,7 +68,7 @@ impl UltraLogApp {
             ui.add_enabled_ui(!is_loading, |ui| {
                 if ui.button("+ Add File").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Log Files", &["csv", "log", "txt"])
+                        .add_filter("Log Files", &["csv", "log", "txt", "mlg"])
                         .pick_file()
                     {
                         self.start_loading_file(path);
@@ -128,7 +128,7 @@ impl UltraLogApp {
                         .clicked()
                     {
                         if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Log Files", &["csv"])
+                            .add_filter("Log Files", &["csv", "log", "txt", "mlg"])
                             .pick_file()
                         {
                             self.start_loading_file(path);
@@ -154,7 +154,7 @@ impl UltraLogApp {
                     ui.add_space(12.0);
 
                     ui.label(
-                        egui::RichText::new("CSV, LOG, TXT")
+                        egui::RichText::new("CSV • LOG • TXT • MLG")
                             .color(text_gray)
                             .size(11.0),
                     );

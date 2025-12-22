@@ -3,12 +3,14 @@ use std::error::Error;
 
 use super::ecumaster::{EcuMasterChannel, EcuMasterMeta};
 use super::haltech::{HaltechChannel, HaltechMeta};
+use super::speeduino::{SpeeduinoChannel, SpeeduinoMeta};
 
 /// Metadata enum supporting different ECU formats
 #[derive(Clone, Debug, Serialize, Default)]
 pub enum Meta {
     Haltech(HaltechMeta),
     EcuMaster(EcuMasterMeta),
+    Speeduino(SpeeduinoMeta),
     #[default]
     Empty,
 }
@@ -18,6 +20,7 @@ pub enum Meta {
 pub enum Channel {
     Haltech(HaltechChannel),
     EcuMaster(EcuMasterChannel),
+    Speeduino(SpeeduinoChannel),
 }
 
 impl Serialize for Channel {
@@ -28,6 +31,7 @@ impl Serialize for Channel {
         match self {
             Channel::Haltech(h) => h.serialize(serializer),
             Channel::EcuMaster(e) => e.serialize(serializer),
+            Channel::Speeduino(s) => s.serialize(serializer),
         }
     }
 }
@@ -37,6 +41,7 @@ impl Channel {
         match self {
             Channel::Haltech(h) => h.name.clone(),
             Channel::EcuMaster(e) => e.name.clone(),
+            Channel::Speeduino(s) => s.name.clone(),
         }
     }
 
@@ -45,6 +50,7 @@ impl Channel {
         match self {
             Channel::Haltech(h) => h.id.clone(),
             Channel::EcuMaster(e) => e.path.clone(),
+            Channel::Speeduino(s) => s.name.clone(),
         }
     }
 
@@ -52,6 +58,7 @@ impl Channel {
         match self {
             Channel::Haltech(h) => h.r#type.as_ref().to_string(),
             Channel::EcuMaster(e) => e.path.clone(),
+            Channel::Speeduino(_) => "Speeduino".to_string(),
         }
     }
 
@@ -59,6 +66,7 @@ impl Channel {
         match self {
             Channel::Haltech(h) => h.display_min,
             Channel::EcuMaster(_) => None,
+            Channel::Speeduino(_) => None,
         }
     }
 
@@ -66,6 +74,7 @@ impl Channel {
         match self {
             Channel::Haltech(h) => h.display_max,
             Channel::EcuMaster(_) => None,
+            Channel::Speeduino(_) => None,
         }
     }
 
@@ -73,6 +82,7 @@ impl Channel {
         match self {
             Channel::Haltech(h) => h.unit(),
             Channel::EcuMaster(e) => e.unit(),
+            Channel::Speeduino(s) => s.unit(),
         }
     }
 }
