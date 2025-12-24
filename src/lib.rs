@@ -10,6 +10,7 @@
 //! - [`state`] - Core data types and constants
 //! - [`units`] - Unit preference types and conversion utilities
 //! - [`normalize`] - Field name normalization for standardizing channel names
+//! - [`updater`] - Auto-update functionality for checking and downloading updates
 //! - [`ui`] - User interface components
 //!   - `sidebar` - File list and view options
 //!   - `channels` - Channel selection and display
@@ -25,3 +26,4 @@ pub mod parsers;
 pub mod state;
 pub mod ui;
 pub mod units;
+pub mod updater;

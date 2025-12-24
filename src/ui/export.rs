@@ -24,8 +24,8 @@ impl UltraLogApp {
 
         // Create a simple chart representation as image
         match self.render_chart_to_png(&path) {
-            Ok(_) => self.show_toast("Chart exported as PNG"),
-            Err(e) => self.show_toast(&format!("Export failed: {}", e)),
+            Ok(_) => self.show_toast_success("Chart exported as PNG"),
+            Err(e) => self.show_toast_error(&format!("Export failed: {}", e)),
         }
     }
 
@@ -41,8 +41,8 @@ impl UltraLogApp {
         };
 
         match self.render_chart_to_pdf(&path) {
-            Ok(_) => self.show_toast("Chart exported as PDF"),
-            Err(e) => self.show_toast(&format!("Export failed: {}", e)),
+            Ok(_) => self.show_toast_success("Chart exported as PDF"),
+            Err(e) => self.show_toast_error(&format!("Export failed: {}", e)),
         }
     }
 

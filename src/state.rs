@@ -90,6 +90,40 @@ pub enum LoadingState {
     Loading(String),
 }
 
+/// Type of toast notification (determines color)
+#[derive(Clone, Copy, Default)]
+pub enum ToastType {
+    /// Informational message (blue)
+    #[default]
+    Info,
+    /// Success message (green)
+    Success,
+    /// Warning message (amber)
+    Warning,
+    /// Error message (red)
+    Error,
+}
+
+impl ToastType {
+    /// Get the background color for this toast type
+    pub fn color(&self) -> [u8; 3] {
+        match self {
+            ToastType::Info => [71, 108, 155],    // Blue
+            ToastType::Success => [113, 120, 78], // Olive green
+            ToastType::Warning => [253, 193, 73], // Amber
+            ToastType::Error => [135, 30, 28],    // Dark red
+        }
+    }
+
+    /// Get the text color for this toast type
+    pub fn text_color(&self) -> [u8; 3] {
+        match self {
+            ToastType::Warning => [30, 30, 30], // Dark text for amber background
+            _ => [255, 255, 255],               // White text for other backgrounds
+        }
+    }
+}
+
 /// Cache key for downsampled data, uniquely identifying a channel's data
 #[derive(Hash, Eq, PartialEq, Clone)]
 pub struct CacheKey {

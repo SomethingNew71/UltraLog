@@ -43,6 +43,10 @@ rfd = "0.15"  # Native file dialogs
 open = "5"    # Open URLs in default browser
 memmap2 = "0.9"  # Memory-mapped file loading for large files
 
+# Auto-update
+ureq = { version = "3.0", features = ["json"] }  # Minimal HTTP client
+semver = "1.0"  # Version comparison
+
 # Image loading (for app icon and PNG export)
 image = { version = "0.25", default-features = false, features = ["png"] }
 

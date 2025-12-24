@@ -13,6 +13,7 @@
 //! - `tool_switcher` - Pill-style tab navigation between tools
 //! - `scatter_plot` - Scatter plot visualization view
 //! - `tab_bar` - Chrome-style tabs for managing multiple log files
+//! - `update_dialog` - Auto-update dialog window
 
 pub mod channels;
 pub mod chart;
@@ -26,3 +27,4 @@ pub mod tab_bar;
 pub mod timeline;
 pub mod toast;
 pub mod tool_switcher;
+pub mod update_dialog;

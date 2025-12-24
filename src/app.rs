@@ -14,9 +14,11 @@ use std::thread;
 use crate::parsers::{EcuMaster, EcuType, Haltech, Parseable, Speeduino};
 use crate::state::{
     ActiveTool, CacheKey, LoadResult, LoadedFile, LoadingState, ScatterPlotConfig,
-    ScatterPlotState, SelectedChannel, Tab, CHART_COLORS, COLORBLIND_COLORS, MAX_CHANNELS,
+    ScatterPlotState, SelectedChannel, Tab, ToastType, CHART_COLORS, COLORBLIND_COLORS,
+    MAX_CHANNELS,
 };
 use crate::units::UnitPreferences;
+use crate::updater::{DownloadResult, UpdateCheckResult, UpdateState};
 
 // ============================================================================
 // Main Application State
@@ -28,8 +30,8 @@ pub struct UltraLogApp {
     pub(crate) files: Vec<LoadedFile>,
     /// Currently selected file index (matches active tab's file)
     pub(crate) selected_file: Option<usize>,
-    /// Toast messages for user feedback
-    pub(crate) toast_message: Option<(String, std::time::Instant)>,
+    /// Toast messages for user feedback (message, time, type)
+    pub(crate) toast_message: Option<(String, std::time::Instant, ToastType)>,
     /// Track dropped files to prevent duplicates
     last_drop_time: Option<std::time::Instant>,
     /// Channel for receiving loaded files from background thread
@@ -90,6 +92,19 @@ pub struct UltraLogApp {
     pub(crate) tabs: Vec<Tab>,
     /// Index of the currently active tab
     pub(crate) active_tab: Option<usize>,
+    // === Auto-Update ===
+    /// Current state of the update checker
+    pub(crate) update_state: UpdateState,
+    /// Receiver for update check results from background thread
+    update_check_receiver: Option<Receiver<UpdateCheckResult>>,
+    /// Receiver for download results from background thread
+    update_download_receiver: Option<Receiver<DownloadResult>>,
+    /// Whether to show the update available dialog
+    pub(crate) show_update_dialog: bool,
+    /// User preference: check for updates on startup
+    pub(crate) auto_check_updates: bool,
+    /// Whether the startup check has been performed
+    startup_check_done: bool,
 }
 
 impl Default for UltraLogApp {
@@ -124,6 +139,12 @@ impl Default for UltraLogApp {
             active_tool: ActiveTool::default(),
             tabs: Vec::new(),
             active_tab: None,
+            update_state: UpdateState::default(),
+            update_check_receiver: None,
+            update_download_receiver: None,
+            show_update_dialog: false,
+            auto_check_updates: true, // Enabled by default
+            startup_check_done: false,
         }
     }
 }
@@ -188,7 +209,7 @@ impl UltraLogApp {
     pub fn start_loading_file(&mut self, path: PathBuf) {
         // Check for duplicate
         if self.files.iter().any(|f| f.path == path) {
-            self.show_toast("File already loaded");
+            self.show_toast_warning("File already loaded");
             return;
         }
 
@@ -408,10 +429,10 @@ impl UltraLogApp {
                         self.tabs.push(tab);
                         self.active_tab = Some(self.tabs.len() - 1);
 
-                        self.show_toast("File loaded successfully");
+                        self.show_toast_success("File loaded successfully");
                     }
                     LoadResult::Error(e) => {
-                        self.show_toast(&format!("Error: {}", e));
+                        self.show_toast_error(&format!("Error: {}", e));
                     }
                 }
                 self.load_receiver = None;
@@ -617,7 +638,7 @@ impl UltraLogApp {
     /// Add a channel to the active tab's selection
     pub fn add_channel(&mut self, file_index: usize, channel_index: usize) {
         let Some(tab_idx) = self.active_tab else {
-            self.show_toast("No active tab");
+            self.show_toast_warning("No active tab");
             return;
         };
 
@@ -625,12 +646,12 @@ impl UltraLogApp {
 
         // Only allow adding channels from the tab's file
         if file_index != tab.file_index {
-            self.show_toast("Channel must be from the active tab's file");
+            self.show_toast_warning("Channel must be from the active tab's file");
             return;
         }
 
         if tab.selected_channels.len() >= MAX_CHANNELS {
-            self.show_toast("Maximum 10 channels reached");
+            self.show_toast_warning("Maximum 10 channels reached");
             return;
         }
 
@@ -640,7 +661,7 @@ impl UltraLogApp {
             .iter()
             .any(|c| c.file_index == file_index && c.channel_index == channel_index)
         {
-            self.show_toast("Channel already selected");
+            self.show_toast_warning("Channel already selected");
             return;
         }
 
@@ -850,12 +871,125 @@ impl UltraLogApp {
     }
 
     // ========================================================================
+    // Auto-Update System
+    // ========================================================================
+
+    /// Start checking for updates in background
+    pub fn start_update_check(&mut self) {
+        // Don't start if already checking or downloading
+        if matches!(
+            self.update_state,
+            UpdateState::Checking | UpdateState::Downloading
+        ) {
+            return;
+        }
+
+        self.update_state = UpdateState::Checking;
+
+        let (sender, receiver) = channel();
+        self.update_check_receiver = Some(receiver);
+
+        thread::spawn(move || {
+            let result = crate::updater::check_for_updates();
+            let _ = sender.send(result);
+        });
+    }
+
+    /// Start downloading update in background
+    pub fn start_update_download(&mut self, url: String) {
+        self.update_state = UpdateState::Downloading;
+
+        let (sender, receiver) = channel();
+        self.update_download_receiver = Some(receiver);
+
+        thread::spawn(move || {
+            let result = crate::updater::download_update(&url);
+            let _ = sender.send(result);
+        });
+    }
+
+    /// Check for completed update operations
+    fn check_update_complete(&mut self) {
+        // Check for update check completion
+        if let Some(receiver) = &self.update_check_receiver {
+            if let Ok(result) = receiver.try_recv() {
+                match result {
+                    UpdateCheckResult::UpdateAvailable(info) => {
+                        self.update_state = UpdateState::UpdateAvailable(info);
+                        self.show_update_dialog = true;
+                    }
+                    UpdateCheckResult::UpToDate => {
+                        self.update_state = UpdateState::Idle;
+                        // Only show toast for manual checks (not startup)
+                        if self.startup_check_done {
+                            self.show_toast_success("You're running the latest version");
+                        }
+                    }
+                    UpdateCheckResult::Error(e) => {
+                        self.update_state = UpdateState::Error(e.clone());
+                        // Only show error toast for manual checks
+                        if self.startup_check_done {
+                            self.show_toast_error(&format!("Update check failed: {}", e));
+                        }
+                    }
+                }
+                self.update_check_receiver = None;
+                self.startup_check_done = true;
+            }
+        }
+
+        // Check for download completion
+        if let Some(receiver) = &self.update_download_receiver {
+            if let Ok(result) = receiver.try_recv() {
+                match result {
+                    DownloadResult::Success(path) => {
+                        self.update_state = UpdateState::ReadyToInstall(path);
+                        self.show_toast_success("Update downloaded successfully");
+                    }
+                    DownloadResult::Error(e) => {
+                        self.update_state = UpdateState::Error(e.clone());
+                        self.show_toast_error(&format!("Download failed: {}", e));
+                    }
+                }
+                self.update_download_receiver = None;
+            }
+        }
+    }
+
+    /// Check for updates on startup (runs once)
+    fn check_startup_update(&mut self) {
+        if !self.startup_check_done && self.auto_check_updates {
+            self.start_update_check();
+        }
+    }
+
+    // ========================================================================
     // Toast Notifications
     // ========================================================================
 
-    /// Show a toast message
+    /// Show a toast message with a specific type
+    pub fn show_toast_with_type(&mut self, message: &str, toast_type: ToastType) {
+        self.toast_message = Some((message.to_string(), std::time::Instant::now(), toast_type));
+    }
+
+    /// Show an info toast (blue) - default for general messages
     pub fn show_toast(&mut self, message: &str) {
-        self.toast_message = Some((message.to_string(), std::time::Instant::now()));
+        self.show_toast_with_type(message, ToastType::Info);
+    }
+
+    /// Show a success toast (green)
+    pub fn show_toast_success(&mut self, message: &str) {
+        self.show_toast_with_type(message, ToastType::Success);
+    }
+
+    /// Show a warning toast (amber)
+    pub fn show_toast_warning(&mut self, message: &str) {
+        self.show_toast_with_type(message, ToastType::Warning);
+    }
+
+    /// Show an error toast (red)
+    pub fn show_toast_error(&mut self, message: &str) {
+        self.show_toast_with_type(message, ToastType::Error);
     }
 
     // ========================================================================
@@ -937,6 +1071,12 @@ impl UltraLogApp {
 
 impl eframe::App for UltraLogApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Check for updates on startup (runs once)
+        self.check_startup_update();
+
+        // Check for completed update operations
+        self.check_update_complete();
+
         // Check for completed background loads
         self.check_loading_complete();
 
@@ -952,16 +1092,22 @@ impl eframe::App for UltraLogApp {
         // Apply dark theme
         ctx.set_visuals(egui::Visuals::dark());
 
-        // Request repaint while loading (for spinner animation)
-        if matches!(self.loading_state, LoadingState::Loading(_)) {
+        // Request repaint while loading or updating (for spinner animation)
+        if matches!(self.loading_state, LoadingState::Loading(_))
+            || matches!(
+                self.update_state,
+                UpdateState::Checking | UpdateState::Downloading
+            )
+        {
             ctx.request_repaint();
         }
 
         // Toast notifications
         self.render_toast(ctx);
 
-        // Normalization editor window
+        // Modal windows
         self.render_normalization_editor(ctx);
+        self.render_update_dialog(ctx);
 
         // Menu bar at top with padding
         let menu_frame = egui::Frame::none().inner_margin(egui::Margin {

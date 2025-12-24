@@ -113,6 +113,17 @@ impl UltraLogApp {
                     self.show_normalization_editor = true;
                     ui.close_menu();
                 }
+
+                ui.separator();
+
+                // Auto-update preference
+                if ui
+                    .checkbox(&mut self.auto_check_updates, "🔄  Check for Updates on Startup")
+                    .on_hover_text("Automatically check for new versions when the app starts")
+                    .clicked()
+                {
+                    ui.close_menu();
+                }
             });
 
             // Units menu
@@ -407,6 +418,25 @@ impl UltraLogApp {
 
                 if ui.button("💝  Support Development").clicked() {
                     let _ = open::that("https://github.com/sponsors/SomethingNew71");
+                    ui.close_menu();
+                }
+
+                ui.separator();
+
+                // Check for Updates
+                let is_checking = matches!(
+                    self.update_state,
+                    crate::updater::UpdateState::Checking
+                        | crate::updater::UpdateState::Downloading
+                );
+                let button_text = if is_checking {
+                    "🔄  Checking for Updates..."
+                } else {
+                    "🔄  Check for Updates"
+                };
+
+                if ui.add_enabled(!is_checking, egui::Button::new(button_text)).clicked() {
+                    self.start_update_check();
                     ui.close_menu();
                 }
 
