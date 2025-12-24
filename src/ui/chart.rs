@@ -95,6 +95,7 @@ impl UltraLogApp {
         let color_blind_mode = self.color_blind_mode;
         let chart_interacted = self.get_chart_interacted();
         let initial_view_seconds = self.initial_view_seconds;
+        let jump_to_time = self.get_jump_to_time();
 
         // Fixed Y bounds for normalized data (0-1 with small padding)
         const Y_MIN: f64 = -0.05;
@@ -115,8 +116,23 @@ impl UltraLogApp {
             let mut x_min = current_bounds.min()[0];
             let mut x_max = current_bounds.max()[0];
 
-            // In cursor tracking mode, center on cursor
-            if cursor_tracking {
+            // Handle jump-to-time request (from min/max jump buttons)
+            if let (Some(jump_time), Some((min_t, max_t))) = (jump_to_time, time_range) {
+                // Center the view on the jump target time
+                let current_width = (x_max - x_min).max(view_window);
+                let half_width = current_width / 2.0;
+                x_min = (jump_time - half_width).max(min_t);
+                x_max = (jump_time + half_width).min(max_t);
+                // Adjust if we hit a boundary
+                if x_max - x_min < current_width {
+                    if x_min == min_t {
+                        x_max = (min_t + current_width).min(max_t);
+                    } else {
+                        x_min = (max_t - current_width).max(min_t);
+                    }
+                }
+            } else if cursor_tracking {
+                // In cursor tracking mode, center on cursor
                 if let (Some(cursor), Some((min_t, max_t))) = (cursor_time, time_range) {
                     let half_window = view_window / 2.0;
                     x_min = (cursor - half_window).max(min_t);
@@ -212,6 +228,13 @@ impl UltraLogApp {
             self.set_chart_interacted(true);
         }
 
+        // Clear jump-to-time request after it's been processed
+        if self.get_jump_to_time().is_some() {
+            self.clear_jump_to_time();
+            // Mark chart as interacted so future jumps work correctly
+            self.set_chart_interacted(true);
+        }
+
         // Handle click on chart to set cursor position
         if response.response.clicked() {
             if let Some(pos) = response.inner {
@@ -232,88 +255,6 @@ impl UltraLogApp {
             }
         }
 
-        // Render min/max legend overlay in top-left corner
-        self.render_minmax_legend(ui, response.response.rect);
-    }
-
-    /// Render the min/max legend overlay in the top-left corner of the chart
-    pub fn render_minmax_legend(&self, ui: &mut egui::Ui, chart_rect: egui::Rect) {
-        let selected_channels = self.get_selected_channels();
-
-        if selected_channels.is_empty() {
-            return;
-        }
-
-        let legend_pos = chart_rect.left_top() + egui::vec2(10.0, 10.0);
-
-        egui::Area::new(egui::Id::new("minmax_legend"))
-            .fixed_pos(legend_pos)
-            .order(egui::Order::Foreground)
-            .show(ui.ctx(), |ui| {
-                egui::Frame::none()
-                    .fill(egui::Color32::from_rgba_unmultiplied(30, 30, 30, 220))
-                    .rounding(6.0)
-                    .inner_margin(8.0)
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 60)))
-                    .show(ui, |ui| {
-                        ui.set_min_width(120.0);
-
-                        ui.label(egui::RichText::new("Min / Max").color(egui::Color32::GRAY));
-                        ui.add_space(4.0);
-
-                        for selected in selected_channels {
-                            let color = self.get_channel_color(selected.color_index);
-                            let color32 = egui::Color32::from_rgb(color[0], color[1], color[2]);
-
-                            // Get display name (normalized or original based on setting)
-                            let channel_name = selected.channel.name();
-                            let display_name = if self.field_normalization {
-                                normalize_channel_name_with_custom(
-                                    &channel_name,
-                                    Some(&self.custom_normalizations),
-                                )
-                            } else {
-                                channel_name
-                            };
-
-                            if let Some((min_val, max_val)) = self
-                                .get_channel_min_max(selected.file_index, selected.channel_index)
-                            {
-                                let source_unit = selected.channel.unit();
-                                let (converted_min, display_unit) =
-                                    self.unit_preferences.convert_value(min_val, source_unit);
-                                let (converted_max, _) =
-                                    self.unit_preferences.convert_value(max_val, source_unit);
-                                let unit_str = if display_unit.is_empty() {
-                                    String::new()
-                                } else {
-                                    format!(" {}", display_unit)
-                                };
-
-                                ui.horizontal(|ui| {
-                                    // Color indicator dot
-                                    let (rect, _) = ui.allocate_exact_size(
-                                        egui::vec2(10.0, 10.0),
-                                        egui::Sense::hover(),
-                                    );
-                                    ui.painter().circle_filled(rect.center(), 5.0, color32);
-
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "{}: {:.2}{} / {:.2}{}",
-                                            display_name,
-                                            converted_min,
-                                            unit_str,
-                                            converted_max,
-                                            unit_str
-                                        ))
-                                        .color(color32),
-                                    );
-                                });
-                            }
-                        }
-                    });
-            });
     }
 
     /// Format time in seconds to a human-readable string (h:mm:ss.xxx or m:ss.xxx or s.xxx)

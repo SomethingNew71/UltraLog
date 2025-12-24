@@ -148,37 +148,118 @@ impl UltraLogApp {
         ui.heading("Selected Channels");
         ui.separator();
 
-        let mut channel_to_remove: Option<usize> = None;
         let use_normalization = self.field_normalization;
-        let custom_mappings = &self.custom_normalizations;
 
         // Get selected channels from the active tab
         let selected_channels = self.get_selected_channels().to_vec();
 
+        // Pre-compute all display data to avoid borrow conflicts in closure
+        struct ChannelCardData {
+            color: egui::Color32,
+            display_name: String,
+            min_str: Option<String>,
+            max_str: Option<String>,
+            min_record: Option<usize>,
+            max_record: Option<usize>,
+            min_time: Option<f64>,
+            max_time: Option<f64>,
+        }
+
+        let mut channel_cards: Vec<ChannelCardData> = Vec::with_capacity(selected_channels.len());
+
+        for selected in &selected_channels {
+            let color = self.get_channel_color(selected.color_index);
+            let color32 = egui::Color32::from_rgb(color[0], color[1], color[2]);
+
+            // Get display name
+            let channel_name = selected.channel.name();
+            let display_name = if use_normalization {
+                normalize_channel_name_with_custom(
+                    &channel_name,
+                    Some(&self.custom_normalizations),
+                )
+            } else {
+                channel_name
+            };
+
+            // Get actual data min/max with record indices
+            let (min_str, max_str, min_record, max_record, min_time, max_time) =
+                if selected.file_index < self.files.len() {
+                    let file = &self.files[selected.file_index];
+                    let data = file.log.get_channel_data(selected.channel_index);
+                    let times = file.log.get_times_as_f64();
+
+                    if !data.is_empty() {
+                        // Find min and max with their indices
+                        let (min_idx, min_val) = data
+                            .iter()
+                            .enumerate()
+                            .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                            .map(|(i, v)| (i, *v))
+                            .unwrap();
+                        let (max_idx, max_val) = data
+                            .iter()
+                            .enumerate()
+                            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                            .map(|(i, v)| (i, *v))
+                            .unwrap();
+
+                        let source_unit = selected.channel.unit();
+                        let (conv_min, display_unit) =
+                            self.unit_preferences.convert_value(min_val, source_unit);
+                        let (conv_max, _) =
+                            self.unit_preferences.convert_value(max_val, source_unit);
+                        let unit_str = if display_unit.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" {}", display_unit)
+                        };
+
+                        (
+                            Some(format!("{:.1}{}", conv_min, unit_str)),
+                            Some(format!("{:.1}{}", conv_max, unit_str)),
+                            Some(min_idx),
+                            Some(max_idx),
+                            times.get(min_idx).copied(),
+                            times.get(max_idx).copied(),
+                        )
+                    } else {
+                        (None, None, None, None, None, None)
+                    }
+                } else {
+                    (None, None, None, None, None, None)
+                };
+
+            channel_cards.push(ChannelCardData {
+                color: color32,
+                display_name,
+                min_str,
+                max_str,
+                min_record,
+                max_record,
+                min_time,
+                max_time,
+            });
+        }
+
+        let mut channel_to_remove: Option<usize> = None;
+        let mut jump_to: Option<(usize, f64)> = None; // (record, time)
+
         egui::ScrollArea::horizontal().show(ui, |ui| {
             ui.horizontal(|ui| {
-                for (i, selected) in selected_channels.iter().enumerate() {
-                    let color = self.get_channel_color(selected.color_index);
-                    let color32 = egui::Color32::from_rgb(color[0], color[1], color[2]);
-
-                    // Get display name (normalized or original based on setting)
-                    let channel_name = selected.channel.name();
-                    let display_name = if use_normalization {
-                        normalize_channel_name_with_custom(&channel_name, Some(custom_mappings))
-                    } else {
-                        channel_name
-                    };
-
+                for (i, card) in channel_cards.iter().enumerate() {
                     egui::Frame::none()
                         .fill(egui::Color32::from_rgb(40, 40, 40))
-                        .stroke(egui::Stroke::new(2.0, color32))
+                        .stroke(egui::Stroke::new(2.0, card.color))
                         .rounding(5.0)
                         .inner_margin(10.0)
                         .show(ui, |ui| {
                             ui.vertical(|ui| {
                                 ui.horizontal(|ui| {
                                     ui.label(
-                                        egui::RichText::new(&display_name).strong().color(color32),
+                                        egui::RichText::new(&card.display_name)
+                                            .strong()
+                                            .color(card.color),
                                     );
                                     let close_btn = ui.small_button("x");
                                     if close_btn.clicked() {
@@ -189,35 +270,62 @@ impl UltraLogApp {
                                     }
                                 });
 
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "Type: {}",
-                                        selected.channel.type_name()
-                                    ))
-                                    .color(egui::Color32::GRAY),
-                                );
+                                // Show min with jump button
+                                if let Some(min_str) = &card.min_str {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            egui::RichText::new("Min:")
+                                                .color(egui::Color32::GRAY)
+                                                .small(),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(min_str)
+                                                .color(egui::Color32::LIGHT_GRAY),
+                                        );
+                                        if let (Some(record), Some(time)) =
+                                            (card.min_record, card.min_time)
+                                        {
+                                            let btn = ui
+                                                .small_button("⏵")
+                                                .on_hover_text("Jump to minimum");
+                                            if btn.clicked() {
+                                                jump_to = Some((record, time));
+                                            }
+                                            if btn.hovered() {
+                                                ui.ctx()
+                                                    .set_cursor_icon(egui::CursorIcon::PointingHand);
+                                            }
+                                        }
+                                    });
+                                }
 
-                                if let (Some(min), Some(max)) = (
-                                    selected.channel.display_min(),
-                                    selected.channel.display_max(),
-                                ) {
-                                    let source_unit = selected.channel.unit();
-                                    let (conv_min, display_unit) =
-                                        self.unit_preferences.convert_value(min, source_unit);
-                                    let (conv_max, _) =
-                                        self.unit_preferences.convert_value(max, source_unit);
-                                    let unit_str = if display_unit.is_empty() {
-                                        String::new()
-                                    } else {
-                                        format!(" {}", display_unit)
-                                    };
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "Range: {:.0}{} - {:.0}{}",
-                                            conv_min, unit_str, conv_max, unit_str
-                                        ))
-                                        .color(egui::Color32::GRAY),
-                                    );
+                                // Show max with jump button
+                                if let Some(max_str) = &card.max_str {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            egui::RichText::new("Max:")
+                                                .color(egui::Color32::GRAY)
+                                                .small(),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(max_str)
+                                                .color(egui::Color32::LIGHT_GRAY),
+                                        );
+                                        if let (Some(record), Some(time)) =
+                                            (card.max_record, card.max_time)
+                                        {
+                                            let btn = ui
+                                                .small_button("⏵")
+                                                .on_hover_text("Jump to maximum");
+                                            if btn.clicked() {
+                                                jump_to = Some((record, time));
+                                            }
+                                            if btn.hovered() {
+                                                ui.ctx()
+                                                    .set_cursor_icon(egui::CursorIcon::PointingHand);
+                                            }
+                                        }
+                                    });
                                 }
                             });
                         });
@@ -226,6 +334,17 @@ impl UltraLogApp {
                 }
             });
         });
+
+        // Handle jump to min/max
+        if let Some((record, time)) = jump_to {
+            self.set_cursor_time(Some(time));
+            self.set_cursor_record(Some(record));
+            // Request the chart to center on this time
+            self.set_jump_to_time(Some(time));
+            // Stop playback when jumping
+            self.is_playing = false;
+            self.last_frame_time = None;
+        }
 
         if let Some(index) = channel_to_remove {
             self.remove_channel(index);

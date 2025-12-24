@@ -394,20 +394,12 @@ impl UltraLogApp {
                     .insert(egui::TextStyle::Body, egui::FontId::proportional(14.0));
 
                 if ui.button("📖  Documentation").clicked() {
-                    let _ = open::that("https://github.com/SomethingNew71/UltraLog#readme");
+                    let _ = open::that("https://github.com/SomethingNew71/UltraLog/wiki");
                     ui.close_menu();
                 }
 
                 if ui.button("🐛  Report Issue").clicked() {
                     let _ = open::that("https://github.com/SomethingNew71/UltraLog/issues");
-                    ui.close_menu();
-                }
-
-                ui.separator();
-
-                if ui.button("📧  Email Support").clicked() {
-                    let _ =
-                        open::that("mailto:support@classicminidiy.com?subject=UltraLog%20Support");
                     ui.close_menu();
                 }
 

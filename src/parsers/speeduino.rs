@@ -267,8 +267,17 @@ impl Speeduino {
 
         // Parse data blocks
         offset = data_begin_index;
-        let mut times = Vec::new();
-        let mut data_records: Vec<Vec<Value>> = Vec::new();
+        // Estimate record count: remaining data / approximate record size (timestamp + data + CRC)
+        // Each record is roughly: 1 (block type) + 2 (timestamp) + num_fields * ~4 bytes + 1 (CRC)
+        let remaining_data = data.len().saturating_sub(data_begin_index);
+        let estimated_record_size = 4 + channels.len() * 4;
+        let estimated_records = if estimated_record_size > 0 {
+            remaining_data / estimated_record_size
+        } else {
+            1000 // Fallback estimate
+        };
+        let mut times: Vec<f64> = Vec::with_capacity(estimated_records);
+        let mut data_records: Vec<Vec<Value>> = Vec::with_capacity(estimated_records);
 
         // Track timestamp wraparound (u16 wraps at 65535ms = 65.535 seconds)
         let mut prev_raw_timestamp: u16 = 0;
@@ -409,7 +418,7 @@ impl Speeduino {
                 }
 
                 // Only add the timestamp and record together to ensure they stay in sync
-                times.push(format!("{:.3}", timestamp));
+                times.push(timestamp);
                 data_records.push(record);
 
                 // Skip CRC (1 byte)
@@ -443,22 +452,20 @@ impl Speeduino {
             eprintln!("DEBUG: Timestamp analysis:");
             let mut non_monotonic_count = 0;
             let mut prev_time: f64 = 0.0;
-            for (i, time_str) in times.iter().enumerate() {
-                if let Ok(t) = time_str.parse::<f64>() {
-                    if i > 0 && t < prev_time {
-                        non_monotonic_count += 1;
-                        if non_monotonic_count <= 5 {
-                            eprintln!(
-                                "  Non-monotonic at index {}: {} -> {} (delta: {:.3})",
-                                i,
-                                prev_time,
-                                t,
-                                t - prev_time
-                            );
-                        }
+            for (i, &t) in times.iter().enumerate() {
+                if i > 0 && t < prev_time {
+                    non_monotonic_count += 1;
+                    if non_monotonic_count <= 5 {
+                        eprintln!(
+                            "  Non-monotonic at index {}: {} -> {} (delta: {:.3})",
+                            i,
+                            prev_time,
+                            t,
+                            t - prev_time
+                        );
                     }
-                    prev_time = t;
                 }
+                prev_time = t;
             }
             if non_monotonic_count > 0 {
                 eprintln!("  Total non-monotonic jumps: {}", non_monotonic_count);

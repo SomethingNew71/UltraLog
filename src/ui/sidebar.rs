@@ -199,7 +199,7 @@ impl UltraLogApp {
                     ui.add_space(12.0);
 
                     ui.label(
-                        egui::RichText::new("CSV • LOG • TXT • MLG • HLGZIP • DAQ • LLG")
+                        egui::RichText::new("CSV • LOG • TXT • MLG")
                             .color(text_gray)
                             .size(11.0),
                     );

@@ -4,8 +4,9 @@
 //! implementation. UI rendering is delegated to the `ui` submodules.
 
 use eframe::egui;
+use memmap2::Mmap;
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
@@ -37,6 +38,8 @@ pub struct UltraLogApp {
     pub(crate) loading_state: LoadingState,
     /// Cache for downsampled chart data
     pub(crate) downsample_cache: HashMap<CacheKey, Vec<[f64; 2]>>,
+    /// Cache for channel min/max values (avoids O(n) scans)
+    pub(crate) minmax_cache: HashMap<CacheKey, (f64, f64)>,
     /// Current cursor position in seconds (timeline feature)
     pub(crate) cursor_time: Option<f64>,
     /// Total time range across all loaded files (min, max)
@@ -71,10 +74,14 @@ pub struct UltraLogApp {
     pub(crate) custom_normalizations: HashMap<String, String>,
     /// Whether to show the normalization editor window
     pub(crate) show_normalization_editor: bool,
-    /// Input field for new source name in editor
-    pub(crate) norm_editor_source: String,
-    /// Input field for new normalized name in editor
-    pub(crate) norm_editor_target: String,
+    /// Input field for source name in "Extend Built-in" section
+    pub(crate) norm_editor_extend_source: String,
+    /// Selected built-in target in the extend dropdown
+    pub(crate) norm_editor_selected_target: Option<String>,
+    /// Input field for source name in "Create New Mapping" section
+    pub(crate) norm_editor_custom_source: String,
+    /// Input field for new normalized name in "Create New Mapping" section
+    pub(crate) norm_editor_custom_target: String,
     // === Tool/View Selection ===
     /// Currently active tool/view
     pub(crate) active_tool: ActiveTool,
@@ -95,6 +102,7 @@ impl Default for UltraLogApp {
             load_receiver: None,
             loading_state: LoadingState::Idle,
             downsample_cache: HashMap::new(),
+            minmax_cache: HashMap::new(),
             cursor_time: None,
             time_range: None,
             cursor_record: None,
@@ -109,8 +117,10 @@ impl Default for UltraLogApp {
             unit_preferences: UnitPreferences::default(),
             custom_normalizations: HashMap::new(),
             show_normalization_editor: false,
-            norm_editor_source: String::new(),
-            norm_editor_target: String::new(),
+            norm_editor_extend_source: String::new(),
+            norm_editor_selected_target: None,
+            norm_editor_custom_source: String::new(),
+            norm_editor_custom_target: String::new(),
             active_tool: ActiveTool::default(),
             tabs: Vec::new(),
             active_tab: None,
@@ -200,35 +210,16 @@ impl UltraLogApp {
     }
 
     /// Synchronously load a file (runs in background thread)
+    /// Uses memory-mapped files for large files (>10MB) for better performance.
     fn load_file_sync(path: PathBuf) -> LoadResult {
-        // First try reading as binary to detect Speeduino/rusEFI MLG format
-        let binary_data = match fs::read(&path) {
-            Ok(d) => d,
-            Err(e) => return LoadResult::Error(format!("Failed to read file: {}", e)),
+        // Use memory mapping for large files (>10MB) to reduce memory pressure
+        const MMAP_THRESHOLD: u64 = 10 * 1024 * 1024;
+
+        // Get file metadata to check size
+        let file_size = match fs::metadata(&path) {
+            Ok(meta) => meta.len(),
+            Err(e) => return LoadResult::Error(format!("Failed to read file metadata: {}", e)),
         };
-
-        // Check for Haltech HEPS format (.hlgzip) - proprietary compressed format
-        if binary_data.len() >= 4 && &binary_data[0..4] == b"HEPS" {
-            return LoadResult::Error(
-                "This is a Haltech .hlgzip file which uses proprietary compression.\n\n\
-                To use this log in UltraLog, please export it as CSV from Haltech's ESP or NSP software:\n\
-                1. Open the .hlgzip file in Haltech ESP/NSP\n\
-                2. Go to File → Export → CSV\n\
-                3. Load the exported .csv file in UltraLog".to_string()
-            );
-        }
-
-        // Check for AEM .daq format - proprietary format (starts with "EMERALD")
-        if binary_data.len() >= 7 && &binary_data[0..7] == b"EMERALD" {
-            return LoadResult::Error(
-                "This is an AEM .daq file which uses a proprietary format.\n\n\
-                To use this log in UltraLog, please export it as CSV from AEM's software:\n\
-                1. Open the .daq file in AEMdata or AEM Pro\n\
-                2. Go to File → Export → CSV\n\
-                3. Load the exported .csv file in UltraLog"
-                    .to_string(),
-            );
-        }
 
         // Check for Link .llg format - proprietary format (check by extension since header varies)
         if let Some(ext) = path.extension() {
@@ -244,41 +235,18 @@ impl UltraLogApp {
             }
         }
 
-        // Auto-detect file format and parse
-        let (log, ecu_type) = if Speeduino::detect(&binary_data) {
-            // Speeduino/rusEFI MLG format detected (binary)
-            match Speeduino::parse_binary(&binary_data) {
-                Ok(l) => (l, EcuType::Speeduino),
-                Err(e) => {
-                    return LoadResult::Error(format!(
-                        "Failed to parse Speeduino/rusEFI MLG file: {}",
-                        e
-                    ))
-                }
+        // Load file data - use mmap for large files, regular read for small files
+        let (log, ecu_type) = if file_size > MMAP_THRESHOLD {
+            // Use memory-mapped file for large files
+            match Self::load_with_mmap(&path) {
+                Ok(result) => result,
+                Err(e) => return e,
             }
         } else {
-            // Try parsing as text-based formats
-            let contents = match String::from_utf8(binary_data) {
-                Ok(c) => c,
-                Err(_) => return LoadResult::Error("File is not valid UTF-8 text".into()),
-            };
-
-            if EcuMaster::detect(&contents) {
-                // ECUMaster format detected
-                let parser = EcuMaster;
-                match parser.parse(&contents) {
-                    Ok(l) => (l, EcuType::EcuMaster),
-                    Err(e) => {
-                        return LoadResult::Error(format!("Failed to parse ECUMaster file: {}", e))
-                    }
-                }
-            } else {
-                // Default to Haltech format
-                let parser = Haltech;
-                match parser.parse(&contents) {
-                    Ok(l) => (l, EcuType::Haltech),
-                    Err(e) => return LoadResult::Error(format!("Failed to parse file: {}", e)),
-                }
+            // Use regular file read for small files
+            match Self::load_with_read(&path) {
+                Ok(result) => result,
+                Err(e) => return e,
             }
         };
 
@@ -293,6 +261,118 @@ impl UltraLogApp {
             ecu_type,
             log,
         }))
+    }
+
+    /// Load file using memory-mapped I/O for better performance with large files
+    fn load_with_mmap(path: &PathBuf) -> Result<(crate::parsers::Log, EcuType), LoadResult> {
+        let file = match File::open(path) {
+            Ok(f) => f,
+            Err(e) => return Err(LoadResult::Error(format!("Failed to open file: {}", e))),
+        };
+
+        // SAFETY: The file is opened read-only and we don't modify it.
+        // The mapping is dropped after parsing completes.
+        let mmap = match unsafe { Mmap::map(&file) } {
+            Ok(m) => m,
+            Err(e) => return Err(LoadResult::Error(format!("Failed to memory-map file: {}", e))),
+        };
+
+        Self::parse_binary_data(&mmap, path)
+    }
+
+    /// Load file using regular file read (for smaller files)
+    fn load_with_read(path: &PathBuf) -> Result<(crate::parsers::Log, EcuType), LoadResult> {
+        let binary_data = match fs::read(path) {
+            Ok(d) => d,
+            Err(e) => return Err(LoadResult::Error(format!("Failed to read file: {}", e))),
+        };
+
+        Self::parse_binary_data(&binary_data, path)
+    }
+
+    /// Parse binary data and detect file format
+    fn parse_binary_data(
+        binary_data: &[u8],
+        path: &PathBuf,
+    ) -> Result<(crate::parsers::Log, EcuType), LoadResult> {
+        // Check for Haltech HEPS format (.hlgzip) - proprietary compressed format
+        if binary_data.len() >= 4 && &binary_data[0..4] == b"HEPS" {
+            return Err(LoadResult::Error(
+                "This is a Haltech .hlgzip file which uses proprietary compression.\n\n\
+                To use this log in UltraLog, please export it as CSV from Haltech's ESP or NSP software:\n\
+                1. Open the .hlgzip file in Haltech ESP/NSP\n\
+                2. Go to File → Export → CSV\n\
+                3. Load the exported .csv file in UltraLog"
+                    .to_string(),
+            ));
+        }
+
+        // Check for AEM .daq format - proprietary format (starts with "EMERALD")
+        if binary_data.len() >= 7 && &binary_data[0..7] == b"EMERALD" {
+            return Err(LoadResult::Error(
+                "This is an AEM .daq file which uses a proprietary format.\n\n\
+                To use this log in UltraLog, please export it as CSV from AEM's software:\n\
+                1. Open the .daq file in AEMdata or AEM Pro\n\
+                2. Go to File → Export → CSV\n\
+                3. Load the exported .csv file in UltraLog"
+                    .to_string(),
+            ));
+        }
+
+        // Auto-detect file format and parse
+        if Speeduino::detect(binary_data) {
+            // Speeduino/rusEFI MLG format detected (binary)
+            match Speeduino::parse_binary(binary_data) {
+                Ok(l) => Ok((l, EcuType::Speeduino)),
+                Err(e) => Err(LoadResult::Error(format!(
+                    "Failed to parse Speeduino/rusEFI MLG file: {}",
+                    e
+                ))),
+            }
+        } else {
+            // Try parsing as text-based formats
+            // For mmap, we use from_utf8 which doesn't copy the data
+            let contents = match std::str::from_utf8(binary_data) {
+                Ok(c) => c,
+                Err(_) => {
+                    // Fall back to lossy conversion for files with encoding issues
+                    return Self::parse_text_lossy(binary_data, path);
+                }
+            };
+
+            Self::parse_text_content(contents)
+        }
+    }
+
+    /// Parse text content after UTF-8 validation
+    fn parse_text_content(contents: &str) -> Result<(crate::parsers::Log, EcuType), LoadResult> {
+        if EcuMaster::detect(contents) {
+            // ECUMaster format detected
+            let parser = EcuMaster;
+            match parser.parse(contents) {
+                Ok(l) => Ok((l, EcuType::EcuMaster)),
+                Err(e) => Err(LoadResult::Error(format!(
+                    "Failed to parse ECUMaster file: {}",
+                    e
+                ))),
+            }
+        } else {
+            // Default to Haltech format
+            let parser = Haltech;
+            match parser.parse(contents) {
+                Ok(l) => Ok((l, EcuType::Haltech)),
+                Err(e) => Err(LoadResult::Error(format!("Failed to parse file: {}", e))),
+            }
+        }
+    }
+
+    /// Parse text with lossy UTF-8 conversion for files with encoding issues
+    fn parse_text_lossy(
+        binary_data: &[u8],
+        _path: &PathBuf,
+    ) -> Result<(crate::parsers::Log, EcuType), LoadResult> {
+        let contents = String::from_utf8_lossy(binary_data);
+        Self::parse_text_content(&contents)
     }
 
     /// Check for completed background loads
@@ -417,9 +497,9 @@ impl UltraLogApp {
         None
     }
 
-    /// Get min and max values for a channel across all records
+    /// Get min and max values for a channel across all records (cached)
     pub fn get_channel_min_max(
-        &self,
+        &mut self,
         file_index: usize,
         channel_index: usize,
     ) -> Option<(f64, f64)> {
@@ -427,6 +507,16 @@ impl UltraLogApp {
             return None;
         }
 
+        // Check cache first
+        let cache_key = CacheKey {
+            file_index,
+            channel_index,
+        };
+        if let Some(&cached) = self.minmax_cache.get(&cache_key) {
+            return Some(cached);
+        }
+
+        // Compute min/max
         let file = &self.files[file_index];
         let data = file.log.get_channel_data(channel_index);
 
@@ -434,14 +524,12 @@ impl UltraLogApp {
             return None;
         }
 
-        let mut min_val = f64::MAX;
-        let mut max_val = f64::MIN;
+        let (min_val, max_val) = data.iter().fold((f64::MAX, f64::MIN), |(min, max), &v| {
+            (min.min(v), max.max(v))
+        });
 
-        for &value in &data {
-            min_val = min_val.min(value);
-            max_val = max_val.max(value);
-        }
-
+        // Cache the result
+        self.minmax_cache.insert(cache_key, (min_val, max_val));
         Some((min_val, max_val))
     }
 
@@ -457,7 +545,7 @@ impl UltraLogApp {
                 self.close_tab(tab_idx);
             }
 
-            // Clear cache entries for this file and update indices
+            // Clear downsample cache entries for this file and update indices
             let mut new_cache = HashMap::new();
             for (key, value) in self.downsample_cache.drain() {
                 if key.file_index == index {
@@ -477,6 +565,25 @@ impl UltraLogApp {
                 }
             }
             self.downsample_cache = new_cache;
+
+            // Clear minmax cache entries for this file and update indices
+            let mut new_minmax_cache = HashMap::new();
+            for (key, value) in self.minmax_cache.drain() {
+                if key.file_index == index {
+                    continue;
+                } else if key.file_index > index {
+                    new_minmax_cache.insert(
+                        CacheKey {
+                            file_index: key.file_index - 1,
+                            channel_index: key.channel_index,
+                        },
+                        value,
+                    );
+                } else {
+                    new_minmax_cache.insert(key, value);
+                }
+            }
+            self.minmax_cache = new_minmax_cache;
 
             // Update file indices for remaining tabs and their channels
             for tab in &mut self.tabs {
@@ -683,6 +790,26 @@ impl UltraLogApp {
     pub fn set_chart_interacted(&mut self, interacted: bool) {
         if let Some(tab_idx) = self.active_tab {
             self.tabs[tab_idx].chart_interacted = interacted;
+        }
+    }
+
+    /// Get the pending jump-to-time request for the active tab
+    pub fn get_jump_to_time(&self) -> Option<f64> {
+        self.active_tab
+            .and_then(|idx| self.tabs[idx].jump_to_time)
+    }
+
+    /// Set a jump-to-time request for the active tab (chart will center on this time)
+    pub fn set_jump_to_time(&mut self, time: Option<f64>) {
+        if let Some(tab_idx) = self.active_tab {
+            self.tabs[tab_idx].jump_to_time = time;
+        }
+    }
+
+    /// Clear the jump-to-time request for the active tab
+    pub fn clear_jump_to_time(&mut self) {
+        if let Some(tab_idx) = self.active_tab {
+            self.tabs[tab_idx].jump_to_time = None;
         }
     }
 

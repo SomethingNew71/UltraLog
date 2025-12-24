@@ -181,6 +181,8 @@ pub struct Tab {
     pub time_range: Option<(f64, f64)>,
     /// Scatter plot state for this tab (dual heatmaps)
     pub scatter_plot_state: ScatterPlotState,
+    /// Request to jump the view to a specific time (used for min/max jump buttons)
+    pub jump_to_time: Option<f64>,
 }
 
 impl Tab {
@@ -201,6 +203,7 @@ impl Tab {
             chart_interacted: false,
             time_range: None,
             scatter_plot_state,
+            jump_to_time: None,
         }
     }
 }

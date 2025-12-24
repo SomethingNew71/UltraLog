@@ -1,8 +1,15 @@
+use rayon::prelude::*;
 use regex::Regex;
 use serde::Serialize;
 use std::error::Error;
 use std::str::FromStr;
+use std::sync::LazyLock;
 use strum::{AsRefStr, EnumString};
+
+/// Pre-compiled regex for detecting data rows (timestamp pattern)
+static TIMESTAMP_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\d{1,2}:\d{2}:\d{2}").expect("Invalid timestamp regex")
+});
 
 use super::types::{Channel, Log, Meta, Parseable, Value};
 
@@ -276,27 +283,24 @@ impl Haltech {
 
     /// Check if a line looks like a data row (starts with timestamp)
     fn is_data_row(line: &str) -> bool {
-        // Data rows start with HH:MM:SS pattern
-        let timestamp_regex = Regex::new(r"^\d{1,2}:\d{2}:\d{2}").unwrap();
-        timestamp_regex.is_match(line)
+        // Data rows start with HH:MM:SS pattern - uses pre-compiled static regex
+        TIMESTAMP_REGEX.is_match(line)
     }
 }
 
 impl Parseable for Haltech {
     fn parse(&self, file_contents: &str) -> Result<Log, Box<dyn Error>> {
         let mut meta = HaltechMeta::default();
-        let mut channels: Vec<Channel> = vec![];
-        let mut times: Vec<String> = vec![];
-        let mut data: Vec<Vec<Value>> = vec![];
+        let mut channels: Vec<Channel> = Vec::with_capacity(50); // Typical log has ~20-50 channels
 
         // Regex for key-value pairs like "Key : Value"
         let kv_regex =
             Regex::new(r"^(?<name>[^:]+?)\s*:\s*(?<value>.+)$").expect("Failed to compile regex");
 
         let mut current_channel = HaltechChannel::default();
-        let mut in_data_section = false;
-        let mut first_timestamp: Option<f64> = None;
+        let mut data_lines: Vec<&str> = Vec::new();
 
+        // Phase 1: Parse metadata and channels, collect data lines
         for line in file_contents.lines() {
             let line = line.trim();
 
@@ -307,64 +311,19 @@ impl Parseable for Haltech {
 
             // Check if this is a data row
             if Self::is_data_row(line) {
-                in_data_section = true;
-
-                // Push any pending channel before processing data
+                // Push any pending channel before collecting data lines
                 if !current_channel.name.is_empty() {
                     channels.push(Channel::Haltech(current_channel));
                     current_channel = HaltechChannel::default();
                 }
 
-                // Parse CSV data row
-                let parts: Vec<&str> = line.split(',').collect();
-                if parts.is_empty() {
-                    continue;
-                }
-
-                // First column is timestamp
-                let timestamp_str = parts[0].trim();
-                if let Some(timestamp_secs) = Self::parse_timestamp(timestamp_str) {
-                    // Store relative time from first timestamp
-                    let relative_time = if let Some(first) = first_timestamp {
-                        timestamp_secs - first
-                    } else {
-                        first_timestamp = Some(timestamp_secs);
-                        0.0
-                    };
-                    times.push(format!("{:.3}", relative_time));
-
-                    // Parse remaining values and apply unit conversions
-                    let values: Vec<Value> = parts[1..]
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(idx, v)| {
-                            let v = v.trim();
-                            // Parse raw value as f64
-                            let raw_value: Option<f64> = v.parse::<f64>().ok();
-
-                            raw_value.map(|raw| {
-                                // Apply conversion based on channel type if available
-                                let converted =
-                                    if let Some(Channel::Haltech(ch)) = channels.get(idx) {
-                                        ch.r#type.convert_value(raw)
-                                    } else {
-                                        raw
-                                    };
-                                Value::Float(converted)
-                            })
-                        })
-                        .collect();
-
-                    // Only add if we have values matching channel count
-                    if !values.is_empty() {
-                        data.push(values);
-                    }
-                }
+                // Collect data line for parallel processing
+                data_lines.push(line);
                 continue;
             }
 
             // Not in data section yet - parse metadata and channel definitions
-            if !in_data_section {
+            if data_lines.is_empty() {
                 if let Some(captures) = kv_regex.captures(line) {
                     let name = captures["name"].trim();
                     let value = captures["value"].trim().to_string();
@@ -407,11 +366,75 @@ impl Parseable for Haltech {
             }
         }
 
+        // Phase 2: Parse data rows in parallel
+        // Each row is parsed independently, returning (timestamp, values)
+        let parsed_rows: Vec<(f64, Vec<Value>)> = data_lines
+            .par_iter()
+            .filter_map(|line| {
+                let parts: Vec<&str> = line.split(',').collect();
+                if parts.is_empty() {
+                    return None;
+                }
+
+                // First column is timestamp
+                let timestamp_str = parts[0].trim();
+                let timestamp_secs = Self::parse_timestamp(timestamp_str)?;
+
+                // Parse remaining values and apply unit conversions
+                let values: Vec<Value> = parts[1..]
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, v)| {
+                        let v = v.trim();
+                        let raw_value: f64 = v.parse().ok()?;
+
+                        // Apply conversion based on channel type if available
+                        let converted = if let Some(Channel::Haltech(ch)) = channels.get(idx) {
+                            ch.r#type.convert_value(raw_value)
+                        } else {
+                            raw_value
+                        };
+                        Some(Value::Float(converted))
+                    })
+                    .collect();
+
+                if values.is_empty() {
+                    None
+                } else {
+                    Some((timestamp_secs, values))
+                }
+            })
+            .collect();
+
+        // Phase 3: Post-process results (sequential for ordering)
+        let data_count = parsed_rows.len();
+        let mut times: Vec<f64> = Vec::with_capacity(data_count);
+        let mut data: Vec<Vec<Value>> = Vec::with_capacity(data_count);
+
+        if !parsed_rows.is_empty() {
+            // First timestamp is the base for relative times
+            let first_timestamp = parsed_rows[0].0;
+
+            for (timestamp, values) in parsed_rows {
+                times.push(timestamp - first_timestamp);
+                data.push(values);
+            }
+        }
+
         // Verify data integrity
         let channel_count = channels.len();
         if channel_count > 0 {
             // Filter out data rows that don't match channel count
-            data.retain(|row| row.len() >= channel_count);
+            let mut filtered_times = Vec::with_capacity(times.len());
+            let mut filtered_data = Vec::with_capacity(data.len());
+            for (time, row) in times.into_iter().zip(data.into_iter()) {
+                if row.len() >= channel_count {
+                    filtered_times.push(time);
+                    filtered_data.push(row);
+                }
+            }
+            times = filtered_times;
+            data = filtered_data;
         }
 
         tracing::info!(
@@ -474,10 +497,10 @@ Log : 20250718 02:15:46
         assert_eq!(log.times.len(), 3);
         assert_eq!(log.data.len(), 3);
 
-        // Check relative timestamps
-        assert_eq!(log.times[0], "0.000");
-        assert_eq!(log.times[1], "0.020");
-        assert_eq!(log.times[2], "0.040");
+        // Check relative timestamps (now stored as f64)
+        assert!((log.times[0] - 0.0).abs() < 0.001);
+        assert!((log.times[1] - 0.020).abs() < 0.001);
+        assert!((log.times[2] - 0.040).abs() < 0.001);
 
         // Check unit conversions are applied
         // RPM: y = x (no conversion) - raw 5000 -> 5000 RPM

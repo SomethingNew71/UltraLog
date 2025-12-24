@@ -47,9 +47,9 @@ fn main() {
     println!("Channels: {}", log.channels.len());
     println!("Data points: {}", log.data.len());
     println!(
-        "Time range: {} to {} seconds",
-        log.times.first().unwrap_or(&"N/A".to_string()),
-        log.times.last().unwrap_or(&"N/A".to_string())
+        "Time range: {:.3} to {:.3} seconds",
+        log.times.first().unwrap_or(&0.0),
+        log.times.last().unwrap_or(&0.0)
     );
 
     println!("\n=== First 15 Channels (with units) ===");

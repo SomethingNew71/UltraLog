@@ -178,9 +178,13 @@ impl EcuMaster {
 
 impl Parseable for EcuMaster {
     fn parse(&self, file_contents: &str) -> Result<Log, Box<dyn Error>> {
-        let mut channels: Vec<Channel> = vec![];
-        let mut times: Vec<String> = vec![];
-        let mut data: Vec<Vec<Value>> = vec![];
+        // Pre-allocate based on estimated row count (first line is header)
+        let line_count = file_contents.lines().count();
+        let estimated_data_rows = line_count.saturating_sub(1);
+
+        let mut channels: Vec<Channel> = Vec::with_capacity(50);
+        let mut times: Vec<f64> = Vec::with_capacity(estimated_data_rows);
+        let mut data: Vec<Vec<Value>> = Vec::with_capacity(estimated_data_rows);
 
         let mut lines = file_contents.lines();
 
@@ -220,7 +224,7 @@ impl Parseable for EcuMaster {
             // First column is time (already in seconds)
             let time_str = parts[0].trim();
             if let Ok(time_val) = time_str.parse::<f64>() {
-                times.push(format!("{:.3}", time_val));
+                times.push(time_val);
 
                 // Parse remaining values (may be sparse/empty)
                 let mut row_values: Vec<Value> = Vec::with_capacity(channels.len());

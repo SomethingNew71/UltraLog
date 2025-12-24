@@ -87,31 +87,24 @@ impl Channel {
     }
 }
 
-/// Value types for log data
-#[derive(Clone, Debug)]
-#[allow(dead_code)]
-pub enum Value {
-    Bool(bool),
-    Float(f64),
-    Int(i64),
-    String(String),
-}
+/// Optimized value storage - all ECU log data is stored as f64
+/// This uses 8 bytes per value instead of 16 bytes with the previous enum
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Value(f64);
 
 impl Value {
+    /// Create a new Value from an f64
+    /// Note: Named 'Float' to maintain API compatibility with previous enum variant
+    #[inline]
+    #[allow(non_snake_case)]
+    pub fn Float(value: f64) -> Self {
+        Self(value)
+    }
+
     /// Convert value to f64 for charting
+    #[inline]
     pub fn as_f64(&self) -> f64 {
-        match self {
-            Value::Bool(b) => {
-                if *b {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
-            Value::Float(f) => *f,
-            Value::Int(i) => *i as f64,
-            Value::String(_) => 0.0,
-        }
+        self.0
     }
 }
 
@@ -120,12 +113,7 @@ impl Serialize for Value {
     where
         S: serde::Serializer,
     {
-        match self {
-            Value::Bool(b) => serializer.serialize_bool(*b),
-            Value::Float(f) => serializer.serialize_f64(*f),
-            Value::Int(i) => serializer.serialize_i64(*i),
-            Value::String(s) => serializer.serialize_str(s),
-        }
+        serializer.serialize_f64(self.0)
     }
 }
 
@@ -135,7 +123,8 @@ pub struct Log {
     #[allow(dead_code)]
     pub meta: Meta,
     pub channels: Vec<Channel>,
-    pub times: Vec<String>,
+    /// Time values stored directly as f64 (seconds) for efficiency
+    pub times: Vec<f64>,
     pub data: Vec<Vec<Value>>,
 }
 
@@ -148,12 +137,9 @@ impl Log {
             .collect()
     }
 
-    /// Get time values as f64 (seconds)
-    pub fn get_times_as_f64(&self) -> Vec<f64> {
-        self.times
-            .iter()
-            .filter_map(|t| t.parse::<f64>().ok())
-            .collect()
+    /// Get time values as f64 slice (seconds) - no parsing needed, stored directly
+    pub fn get_times_as_f64(&self) -> &[f64] {
+        &self.times
     }
 
     /// Find channel index by name
