@@ -254,7 +254,6 @@ impl UltraLogApp {
                 }
             }
         }
-
     }
 
     /// Format time in seconds to a human-readable string (h:mm:ss.xxx or m:ss.xxx or s.xxx)

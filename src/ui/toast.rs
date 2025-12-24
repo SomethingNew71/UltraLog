@@ -20,7 +20,11 @@ impl UltraLogApp {
                     .order(egui::Order::Foreground)
                     .show(ctx, |ui| {
                         egui::Frame::none()
-                            .fill(egui::Color32::from_rgb(bg_color[0], bg_color[1], bg_color[2]))
+                            .fill(egui::Color32::from_rgb(
+                                bg_color[0],
+                                bg_color[1],
+                                bg_color[2],
+                            ))
                             .rounding(8.0)
                             .inner_margin(egui::Margin::symmetric(16.0, 12.0))
                             .shadow(egui::epaint::Shadow {

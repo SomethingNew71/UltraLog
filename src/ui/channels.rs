@@ -174,10 +174,7 @@ impl UltraLogApp {
             // Get display name
             let channel_name = selected.channel.name();
             let display_name = if use_normalization {
-                normalize_channel_name_with_custom(
-                    &channel_name,
-                    Some(&self.custom_normalizations),
-                )
+                normalize_channel_name_with_custom(&channel_name, Some(&self.custom_normalizations))
             } else {
                 channel_name
             };
@@ -292,8 +289,9 @@ impl UltraLogApp {
                                                 jump_to = Some((record, time));
                                             }
                                             if btn.hovered() {
-                                                ui.ctx()
-                                                    .set_cursor_icon(egui::CursorIcon::PointingHand);
+                                                ui.ctx().set_cursor_icon(
+                                                    egui::CursorIcon::PointingHand,
+                                                );
                                             }
                                         }
                                     });
@@ -321,8 +319,9 @@ impl UltraLogApp {
                                                 jump_to = Some((record, time));
                                             }
                                             if btn.hovered() {
-                                                ui.ctx()
-                                                    .set_cursor_icon(egui::CursorIcon::PointingHand);
+                                                ui.ctx().set_cursor_icon(
+                                                    egui::CursorIcon::PointingHand,
+                                                );
                                             }
                                         }
                                     });

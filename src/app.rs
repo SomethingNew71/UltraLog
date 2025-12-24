@@ -295,7 +295,12 @@ impl UltraLogApp {
         // The mapping is dropped after parsing completes.
         let mmap = match unsafe { Mmap::map(&file) } {
             Ok(m) => m,
-            Err(e) => return Err(LoadResult::Error(format!("Failed to memory-map file: {}", e))),
+            Err(e) => {
+                return Err(LoadResult::Error(format!(
+                    "Failed to memory-map file: {}",
+                    e
+                )))
+            }
         };
 
         Self::parse_binary_data(&mmap, path)
@@ -816,8 +821,7 @@ impl UltraLogApp {
 
     /// Get the pending jump-to-time request for the active tab
     pub fn get_jump_to_time(&self) -> Option<f64> {
-        self.active_tab
-            .and_then(|idx| self.tabs[idx].jump_to_time)
+        self.active_tab.and_then(|idx| self.tabs[idx].jump_to_time)
     }
 
     /// Set a jump-to-time request for the active tab (chart will center on this time)

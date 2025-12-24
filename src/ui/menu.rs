@@ -118,7 +118,10 @@ impl UltraLogApp {
 
                 // Auto-update preference
                 if ui
-                    .checkbox(&mut self.auto_check_updates, "🔄  Check for Updates on Startup")
+                    .checkbox(
+                        &mut self.auto_check_updates,
+                        "🔄  Check for Updates on Startup",
+                    )
                     .on_hover_text("Automatically check for new versions when the app starts")
                     .clicked()
                 {
@@ -435,7 +438,10 @@ impl UltraLogApp {
                     "🔄  Check for Updates"
                 };
 
-                if ui.add_enabled(!is_checking, egui::Button::new(button_text)).clicked() {
+                if ui
+                    .add_enabled(!is_checking, egui::Button::new(button_text))
+                    .clicked()
+                {
                     self.start_update_check();
                     ui.close_menu();
                 }

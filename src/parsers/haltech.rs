@@ -7,9 +7,8 @@ use std::sync::LazyLock;
 use strum::{AsRefStr, EnumString};
 
 /// Pre-compiled regex for detecting data rows (timestamp pattern)
-static TIMESTAMP_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\d{1,2}:\d{2}:\d{2}").expect("Invalid timestamp regex")
-});
+static TIMESTAMP_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\d{1,2}:\d{2}:\d{2}").expect("Invalid timestamp regex"));
 
 use super::types::{Channel, Log, Meta, Parseable, Value};
 

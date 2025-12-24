@@ -24,25 +24,23 @@ impl UltraLogApp {
             .default_width(420.0)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                match &self.update_state {
-                    UpdateState::UpdateAvailable(info) => {
-                        let info_clone = info.clone();
-                        self.render_update_available(ui, info_clone, &mut should_close);
-                    }
-                    UpdateState::Downloading => {
-                        self.render_downloading(ui);
-                    }
-                    UpdateState::ReadyToInstall(path) => {
-                        let path_clone = path.clone();
-                        self.render_ready_to_install(ui, &path_clone, &mut should_close);
-                    }
-                    UpdateState::Error(e) => {
-                        let error = e.clone();
-                        self.render_update_error(ui, &error, &mut should_close);
-                    }
-                    _ => {}
+            .show(ctx, |ui| match &self.update_state {
+                UpdateState::UpdateAvailable(info) => {
+                    let info_clone = info.clone();
+                    self.render_update_available(ui, info_clone, &mut should_close);
                 }
+                UpdateState::Downloading => {
+                    self.render_downloading(ui);
+                }
+                UpdateState::ReadyToInstall(path) => {
+                    let path_clone = path.clone();
+                    self.render_ready_to_install(ui, &path_clone, &mut should_close);
+                }
+                UpdateState::Error(e) => {
+                    let error = e.clone();
+                    self.render_update_error(ui, &error, &mut should_close);
+                }
+                _ => {}
             });
 
         if !open || should_close {
@@ -63,7 +61,11 @@ impl UltraLogApp {
         ui.vertical_centered(|ui| {
             ui.add_space(10.0);
 
-            ui.label(egui::RichText::new("A new version is available!").size(18.0).strong());
+            ui.label(
+                egui::RichText::new("A new version is available!")
+                    .size(18.0)
+                    .strong(),
+            );
 
             ui.add_space(15.0);
 
@@ -189,7 +191,9 @@ impl UltraLogApp {
                     if let Err(e) = crate::updater::install_update(path) {
                         self.show_toast_error(&e);
                     } else {
-                        self.show_toast_success("Update file opened. Follow the installer instructions.");
+                        self.show_toast_success(
+                            "Update file opened. Follow the installer instructions.",
+                        );
                         *should_close = true;
                         self.update_state = UpdateState::Idle;
                     }
