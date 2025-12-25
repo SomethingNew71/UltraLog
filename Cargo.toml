@@ -25,6 +25,8 @@ eframe = { version = "0.33", default-features = false, features = [
     "default_fonts",
     "glow",
     "persistence",
+    "x11",
+    "wayland",
 ] }
 egui_plot = "0.34"
 egui_extras = { version = "0.33", features = ["image"] }

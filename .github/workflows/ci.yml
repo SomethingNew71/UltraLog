@@ -41,7 +41,12 @@ jobs:
             libatk1.0-dev \
             libcairo2-dev \
             libpango1.0-dev \
-            libgdk-pixbuf2.0-dev
+            libgdk-pixbuf2.0-dev \
+            libwayland-dev \
+            libxcb1-dev \
+            libxcb-randr0-dev \
+            libxcb-xkb-dev \
+            libx11-xcb-dev
 
       - name: Run cargo check
         run: cargo check --all-targets
